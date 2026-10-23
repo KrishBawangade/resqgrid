@@ -7,6 +7,8 @@ import {
   VulnerabilityFactors,
   ReliefRequest,
 } from '@/lib/types';
+import { broadcastRealtimeEvent } from '@/lib/events';
+
 
 // Map database row to frontend ReliefRequest type
 export function formatDbRequest(row: {
@@ -82,6 +84,19 @@ export function formatDbRequest(row: {
   };
 }
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: CORS_HEADERS,
+  });
+}
+
 // GET /api/requests - Fetch all requests from Neon PostgreSQL
 export async function GET() {
   try {
@@ -91,14 +106,14 @@ export async function GET() {
 
     if (rows.length === 0) {
       // If DB has not been seeded yet, return initial scenario requests
-      return NextResponse.json(INITIAL_REQUESTS);
+      return NextResponse.json(INITIAL_REQUESTS, { headers: CORS_HEADERS });
     }
 
-    return NextResponse.json(rows.map(formatDbRequest));
+    return NextResponse.json(rows.map(formatDbRequest), { headers: CORS_HEADERS });
   } catch (err: unknown) {
     console.error('Error fetching requests from Neon:', err);
     // Graceful fallback to initial scenario
-    return NextResponse.json(INITIAL_REQUESTS);
+    return NextResponse.json(INITIAL_REQUESTS, { headers: CORS_HEADERS });
   }
 }
 
@@ -106,27 +121,47 @@ export async function GET() {
 export async function PATCH(request: Request) {
   try {
     const body = await request.json();
-    const { id, verificationStatus, requestStatus, allocatedDepotId, allocatedQty, unfulfilledQty } = body;
+    const { 
+      id, 
+      verificationStatus, 
+      requestStatus, 
+      allocatedDepotId, 
+      allocatedQty, 
+      unfulfilledQty,
+      requestedResources,
+      priorityScore,
+      rejectionReason,
+      notes,
+      waitingMinutes,
+    } = body;
 
     if (!id) {
-      return NextResponse.json({ error: 'Request ID is required' }, { status: 400 });
+      return NextResponse.json({ error: 'Request ID is required' }, { status: 400, headers: CORS_HEADERS });
     }
 
     const updateData: Record<string, unknown> = {};
-    if (verificationStatus) updateData.verificationStatus = verificationStatus;
-    if (requestStatus) updateData.requestStatus = requestStatus;
+    if (verificationStatus !== undefined) updateData.verificationStatus = verificationStatus;
+    if (requestStatus !== undefined) updateData.requestStatus = requestStatus;
     if (allocatedDepotId !== undefined) updateData.allocatedDepotId = allocatedDepotId;
     if (allocatedQty !== undefined) updateData.allocatedQty = allocatedQty;
     if (unfulfilledQty !== undefined) updateData.unfulfilledQty = unfulfilledQty;
+    if (requestedResources !== undefined) updateData.requestedResources = requestedResources;
+    if (priorityScore !== undefined) updateData.priorityScore = priorityScore;
+    if (rejectionReason !== undefined) updateData.rejectionReason = rejectionReason;
+    if (notes !== undefined) updateData.notes = notes;
+    if (waitingMinutes !== undefined) updateData.waitingMinutes = waitingMinutes;
 
     const updated = await db.reliefRequest.update({
       where: { id },
       data: updateData,
     });
 
-    return NextResponse.json(formatDbRequest(updated));
+    const formatted = formatDbRequest(updated);
+    broadcastRealtimeEvent('REQUEST_UPDATED', formatted);
+
+    return NextResponse.json(formatted, { headers: CORS_HEADERS });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Update failed';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 500, headers: CORS_HEADERS });
   }
 }

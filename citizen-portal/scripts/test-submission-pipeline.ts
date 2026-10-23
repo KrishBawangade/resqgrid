@@ -8,15 +8,15 @@ async function testSubmission() {
   console.log('======================================================\n');
 
   const testPayload = {
-    requesterName: 'Nurse Elena Rostova',
-    contactNumber: '+1 (555) 948-2211',
-    zoneName: 'Sector 4 - Riverside Colony',
+    requesterName: 'Dr. Sunita Kulkarni (Clinic Ward)',
+    contactNumber: '+91 98201 92834',
+    zoneName: 'Sector 4 - Kurla West & Kranti Nagar (Mithi Overflow)',
     headcount: 45,
     resources: [
       { resourceType: 'medical_supplies' as const, requestedQty: 30 },
       { resourceType: 'drinking_water' as const, requestedQty: 150 },
     ],
-    notes: 'Urgent: Clinic perimeter breach due to 4ft water level. 8 elderly patients with hypothermia, 3 trauma casualties needing surgical dressings. Drinking water completely exhausted.',
+    notes: 'Urgent: Clinic perimeter breach due to 4.5ft water level from Mithi River. 8 elderly patients with hypothermia, 3 trauma casualties needing surgical dressings. Drinking water completely exhausted.',
   };
 
   console.log('1. Passing input to AI Triage Engine...');
@@ -61,11 +61,11 @@ async function testSubmission() {
       unfulfilledQty: 30,
       requestedResources: testPayload.resources,
       locationZoneName: testPayload.zoneName,
-      locationLat: 13.0827,
-      locationLng: 80.2707,
+      locationLat: 19.0715,
+      locationLng: 72.8785,
       locationAccessibility: 'flooded_boat_only',
       peopleAffected: testPayload.headcount,
-      vulnerability: triageResult.vulnerability,
+      vulnerability: triageResult.vulnerability as any,
       urgencyLevel: triageResult.urgencyLevel,
       scoreBreakdown: scoreBreakdown as unknown as object,
       priorityScore: scoreBreakdown.totalScore,

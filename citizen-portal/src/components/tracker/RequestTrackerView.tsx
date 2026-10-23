@@ -124,6 +124,47 @@ export default function RequestTrackerView() {
     }
   }, [searchParams, requests, getRequestById]);
 
+  // Real-time live status tracking via Server-Sent Events (SSE) Stream (Zero Polling)
+  useEffect(() => {
+    if (!selectedRequest?.id) return;
+    const reqId = selectedRequest.id;
+
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource('http://localhost:3000/api/requests/stream');
+
+      es.onmessage = (event) => {
+        if (!event.data) return;
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === 'REQUEST_UPDATED' && payload.data?.id === reqId) {
+            setSelectedRequest(payload.data as ReliefRequest);
+          }
+        } catch (_) {}
+      };
+    } catch (e) {
+      console.warn('Tracker EventSource error:', e);
+    }
+
+    // BroadcastChannel fallback for instant inter-tab reflection
+    let channel: BroadcastChannel | null = null;
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        channel = new BroadcastChannel('resqgrid_realtime');
+        channel.onmessage = (event) => {
+          if (event.data?.type === 'REQUEST_UPDATED' && event.data?.request?.id === reqId) {
+            setSelectedRequest(event.data.request as ReliefRequest);
+          }
+        };
+      } catch (_) {}
+    }
+
+    return () => {
+      if (es) es.close();
+      if (channel) channel.close();
+    };
+  }, [selectedRequest?.id]);
+
   const handleSearch = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!searchId.trim()) return;

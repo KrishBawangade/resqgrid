@@ -33,6 +33,28 @@ export function useCitizenStore() {
     }
   }, []);
 
+  // Fetch live requests from Neon PostgreSQL database on mount and keep synced
+  useEffect(() => {
+    const fetchLatest = async () => {
+      try {
+        const res = await fetch('/api/requests', { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            setRequests(data);
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+            } catch (_) {}
+          }
+        }
+      } catch (e) {
+        console.warn('Could not fetch requests from Neon DB in citizen store:', e);
+      }
+    };
+
+    fetchLatest();
+  }, []);
+
   // Save new request
   const submitRequest = useCallback((newReq: ReliefRequest) => {
     setRequests((prev) => {

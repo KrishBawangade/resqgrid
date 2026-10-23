@@ -11,30 +11,31 @@ interface InteractiveDisasterMapProps {
   onSelectRequest: (req: ReliefRequest) => void;
 }
 
-// 1. Primary Flash Flood Inundation Corridor Polygon (Sector 4 River Basin)
+// 1. Primary Flash Flood Inundation Corridor Polygon (Mithi River & Kurla Basin)
 const FLOOD_INUNDATION_ZONE: [number, number][] = [
-  [34.0670, -118.2340],
-  [34.0620, -118.2215],
-  [34.0545, -118.2155],
-  [34.0435, -118.2175],
-  [34.0340, -118.2260],
-  [34.0325, -118.2345],
-  [34.0395, -118.2380],
-  [34.0470, -118.2315],
-  [34.0545, -118.2310],
-  [34.0615, -118.2370],
+  [19.0835, 72.8755], // Saki Naka / Mithi upper reach
+  [19.0780, 72.8840], // Kurla Kranti Nagar East
+  [19.0690, 72.8860], // Kurla Station lowlands
+  [19.0610, 72.8790], // Mithi River bend at LBS Marg
+  [19.0520, 72.8690], // Dharavi North / Mithi canal
+  [19.0440, 72.8540], // Mahim Creek confluence
+  [19.0400, 72.8450], // Mahim Causeway mouth
+  [19.0480, 72.8510], // Bandra East marsh border
+  [19.0580, 72.8630], // BKC North channel bank
+  [19.0710, 72.8690], // Kalina CST Road lowlands
+  [19.0800, 72.8680], // Santacruz East border
 ];
 
-// 2. Secondary Evacuation Alert & Debris Perimeter Buffer
+// 2. Secondary Evacuation Alert & Debris Perimeter Buffer (Mumbai Central Corridor)
 const EVACUATION_BUFFER_ZONE: [number, number][] = [
-  [34.0735, -118.2430],
-  [34.0665, -118.2120],
-  [34.0515, -118.2040],
-  [34.0375, -118.2080],
-  [34.0255, -118.2240],
-  [34.0260, -118.2440],
-  [34.0415, -118.2480],
-  [34.0600, -118.2480],
+  [19.0930, 72.8710],
+  [19.0830, 72.8930],
+  [19.0660, 72.8980],
+  [19.0490, 72.8790],
+  [19.0340, 72.8560],
+  [19.0370, 72.8370],
+  [19.0540, 72.8470],
+  [19.0760, 72.8540],
 ];
 
 export default function InteractiveDisasterMap({
@@ -47,6 +48,7 @@ export default function InteractiveDisasterMap({
   const mapInstanceRef = useRef<any>(null);
   const leafletModuleRef = useRef<any>(null);
   const requestMarkersRef = useRef<{ [id: string]: any }>({});
+  const requestsGroupRef = useRef<any>(null);
   const hazardLayersGroupRef = useRef<any>(null);
   const depotRadiiGroupRef = useRef<any>(null);
 
@@ -71,7 +73,7 @@ export default function InteractiveDisasterMap({
 
       // Initialize map
       const map = L.map(mapContainerRef.current, {
-        center: [34.053, -118.235],
+        center: [19.062, 72.868],
         zoom: 13,
         zoomControl: false,
       });
@@ -92,6 +94,9 @@ export default function InteractiveDisasterMap({
 
       const depotRadiiGroup = L.layerGroup().addTo(map);
       depotRadiiGroupRef.current = depotRadiiGroup;
+
+      const requestsGroup = L.layerGroup().addTo(map);
+      requestsGroupRef.current = requestsGroup;
 
       // 1. Draw Affected Disaster Hazard Polygons
       // Outer Evacuation Warning Perimeter
@@ -122,7 +127,7 @@ export default function InteractiveDisasterMap({
         { sticky: true }
       );
 
-      // Centered Hazard Area Watermark Badge on Map
+      // Centered Hazard Area Watermark Badge on Map (Mumbai Mithi Corridor)
       const hazardLabelIcon = L.divIcon({
         className: 'custom-hazard-label',
         html: `
@@ -143,14 +148,14 @@ export default function InteractiveDisasterMap({
             pointer-events: none;
             white-space: nowrap;
           ">
-            <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #ef4444; animation: pulse 1.5s infinite;"></span>
+            <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #ef4444;"></span>
             SECTOR 4 FLOOD CORRIDOR
           </div>
         `,
         iconSize: [180, 26],
         iconAnchor: [90, 13],
       });
-      L.marker([34.0510, -118.2255], { icon: hazardLabelIcon, interactive: false }).addTo(hazardGroup);
+      L.marker([19.0780, 72.8830], { icon: hazardLabelIcon, interactive: false }).addTo(hazardGroup);
 
       // 2. Add Depots & Coverage Radii
       depots.forEach((depot) => {
@@ -242,13 +247,38 @@ export default function InteractiveDisasterMap({
         `);
       });
 
-      // 3. Add Incident / Relief Request Pins (Active requests only)
-      requestMarkersRef.current = {};
+      // Fit bounds initially to Mumbai disaster operational theater
+      const bounds = L.latLngBounds([
+        ...FLOOD_INUNDATION_ZONE,
+        ...depots.map((d) => [d.lat, d.lng] as [number, number]),
+      ]);
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+    });
 
-      requests
-        .filter((r) => r.requestStatus !== 'rejected')
-        .forEach((req) => {
-          const isCritical = req.priorityScore >= 85;
+    return () => {
+      isMounted = false;
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+    };
+  }, []);
+
+  // 2. Dynamically Update Request Markers on Real-Time State Changes (Without Recreating Map)
+  useEffect(() => {
+    const L = leafletModuleRef.current;
+    const map = mapInstanceRef.current;
+    const requestsGroup = requestsGroupRef.current;
+    if (!L || !map || !requestsGroup) return;
+
+    // Clear existing pins
+    requestsGroup.clearLayers();
+    requestMarkersRef.current = {};
+
+    requests
+      .filter((r) => r.requestStatus !== 'rejected')
+      .forEach((req) => {
+        const isCritical = req.priorityScore >= 85;
         const isHigh = req.priorityScore >= 70 && req.priorityScore < 85;
         const color = isCritical ? '#e11d48' : isHigh ? '#d97706' : '#2563eb';
         const isSelected = selectedRequestId === req.id;
@@ -265,20 +295,7 @@ export default function InteractiveDisasterMap({
               transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
               ${isSelected ? 'transform: scale(1.18); z-index: 1000;' : ''}
             ">
-              <!-- Radar Ping for Critical Unfulfilled Needs -->
-              ${isCritical && req.unfulfilledQty > 0 ? `
-                <div style="
-                  position: absolute;
-                  top: -4px;
-                  width: 38px;
-                  height: 38px;
-                  border-radius: 50%;
-                  background: rgba(225, 29, 72, 0.25);
-                  animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
-                "></div>
-              ` : ''}
-
-              <!-- Main Beacon Badge -->
+              <!-- Main Beacon Badge (Clean, solid, non-blinking) -->
               <div style="
                 width: 30px;
                 height: 30px;
@@ -335,7 +352,7 @@ export default function InteractiveDisasterMap({
           iconAnchor: [30, 36],
         });
 
-        const marker = L.marker([req.location.lat, req.location.lng], { icon: requestIcon }).addTo(map);
+        const marker = L.marker([req.location.lat, req.location.lng], { icon: requestIcon }).addTo(requestsGroup);
 
         marker.on('click', () => {
           onSelectRequest(req);
@@ -391,24 +408,7 @@ export default function InteractiveDisasterMap({
 
         requestMarkersRef.current[req.id] = marker;
       });
-
-      // Fit bounds cleanly to show the whole operational theater with margins
-      const bounds = L.latLngBounds([
-        ...FLOOD_INUNDATION_ZONE,
-        ...requests.filter((r) => r.requestStatus !== 'rejected').map((r) => [r.location.lat, r.location.lng] as [number, number]),
-        ...depots.map((d) => [d.lat, d.lng] as [number, number]),
-      ]);
-      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
-    });
-
-    return () => {
-      isMounted = false;
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
-        mapInstanceRef.current = null;
-      }
-    };
-  }, [requests, depots]);
+  }, [requests, selectedRequestId, onSelectRequest]);
 
   // Handle Layer Toggles
   useEffect(() => {

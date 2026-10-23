@@ -14,7 +14,7 @@ import OperationsSummaryRibbon from '@/components/dashboard/OperationsSummaryRib
 import PrioritizedQueueTable, { QueueTabType } from '@/components/dashboard/PrioritizedQueueTable';
 import ScoreInspectorDrawer from '@/components/dashboard/ScoreInspectorDrawer';
 import IncidentBriefingBanner from '@/components/dashboard/IncidentBriefingBanner';
-import { Info } from 'lucide-react';
+import { Info, RefreshCw } from 'lucide-react';
 
 // Dynamically import Leaflet map for SSR safety
 const InteractiveDisasterMap = dynamic(
@@ -29,6 +29,32 @@ const InteractiveDisasterMap = dynamic(
   }
 );
 
+// Soft Web Audio API alert chime for new incoming requests
+function playAlertChime() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof window.AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.12); // A5
+
+    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.45);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start();
+    osc.stop(ctx.currentTime + 0.45);
+  } catch {
+    // Silently ignore if audio autoplay blocked by browser policy
+  }
+}
+
 export default function CoordinatorOperationsPage() {
   const [requests, setRequests] = useState<ReliefRequest[]>(INITIAL_REQUESTS);
   const [depots, setDepots] = useState<ReliefDepot[]>(INITIAL_DEPOTS);
@@ -36,26 +62,140 @@ export default function CoordinatorOperationsPage() {
   const [selectedRequest, setSelectedRequest] = useState<ReliefRequest | null>(null);
   const [queueTab, setQueueTab] = useState<QueueTabType>('needs_attention');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isLiveActive, setIsLiveActive] = useState(true);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  const [isRefreshingManually, setIsRefreshingManually] = useState(false);
 
-  // Fetch live requests from Neon PostgreSQL database on mount
-  React.useEffect(() => {
-    fetch('/api/requests')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (Array.isArray(data) && data.length > 0) {
-          setRequests(data);
-        }
-      })
-      .catch((e) => console.warn('Could not fetch latest requests:', e));
-  }, []);
+  const initialLoadDoneRef = React.useRef(false);
+  const knownRequestIdsRef = React.useRef<Set<string>>(new Set(INITIAL_REQUESTS.map((r) => r.id)));
+  const isFetchingRef = React.useRef(false);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 4000);
   };
 
+  // Initial fetch on mount
+  const loadInitialRequests = React.useCallback(async (isManual = false) => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
+    if (isManual) setIsRefreshingManually(true);
+
+    try {
+      const res = await fetch('/api/requests', { cache: 'no-store' });
+      if (!res.ok) throw new Error('Failed to fetch requests');
+      const data: ReliefRequest[] = await res.json();
+      if (Array.isArray(data)) {
+        setRequests(data);
+        data.forEach((r) => knownRequestIdsRef.current.add(r.id));
+      }
+      setIsLiveActive(true);
+      setLastSyncTime(new Date());
+    } catch (e) {
+      console.warn('Initial request load error:', e);
+    } finally {
+      isFetchingRef.current = false;
+      if (isManual) setIsRefreshingManually(false);
+    }
+  }, []);
+
+  // 1. Establish Real-Time Server-Sent Events (SSE) Stream
+  React.useEffect(() => {
+    loadInitialRequests();
+
+    // Connect to persistent SSE Stream (0 polling, 100% event-driven)
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource('/api/requests/stream');
+
+      eventSource.onopen = () => {
+        setIsLiveActive(true);
+        setLastSyncTime(new Date());
+      };
+
+      eventSource.onmessage = (event) => {
+        setLastSyncTime(new Date());
+        if (!event.data) return;
+
+        try {
+          const payload = JSON.parse(event.data);
+
+          if (payload.type === 'NEW_REQUEST' && payload.data) {
+            const newReq = payload.data as ReliefRequest;
+            setRequests((prev) => {
+              if (prev.some((r) => r.id === newReq.id)) return prev;
+              playAlertChime();
+              showToast(`🚨 Real-Time Stream: New Request ${newReq.id} received in ${newReq.location.zoneName} (${newReq.peopleAffected} people)`);
+              knownRequestIdsRef.current.add(newReq.id);
+              return [newReq, ...prev];
+            });
+          } else if (payload.type === 'REQUEST_UPDATED' && payload.data) {
+            const updated = payload.data as ReliefRequest;
+            setRequests((prev) =>
+              prev.map((r) => (r.id === updated.id ? { ...r, ...updated } : r))
+            );
+            setSelectedRequest((curr) =>
+              curr && curr.id === updated.id ? { ...curr, ...updated } : curr
+            );
+          }
+        } catch {
+          // Ignored for keepalive ping
+        }
+      };
+
+      eventSource.onerror = () => {
+        setIsLiveActive(false);
+      };
+    } catch (err) {
+      console.warn('EventSource initialization error:', err);
+    }
+
+    // Immediate sync on tab focus or visibility resume
+    const handleFocus = () => loadInitialRequests();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadInitialRequests();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Cross-tab broadcast channel for local instant reflection
+    let channel: BroadcastChannel | null = null;
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        channel = new BroadcastChannel('resqgrid_realtime');
+        channel.onmessage = (event) => {
+          if (event.data?.type === 'NEW_REQUEST_SUBMITTED' && event.data?.request) {
+            const newReq = event.data.request as ReliefRequest;
+            setRequests((prev) => {
+              if (prev.some((r) => r.id === newReq.id)) return prev;
+              playAlertChime();
+              showToast(`🚨 New Request ${newReq.id} received in ${newReq.location.zoneName}`);
+              return [newReq, ...prev];
+            });
+          }
+        };
+      } catch (err) {
+        console.warn('BroadcastChannel error:', err);
+      }
+    }
+
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (channel) {
+        channel.close();
+      }
+    };
+  }, [loadInitialRequests]);
+
   // 1. Verify Request
-  const handleVerify = (id: string) => {
+  const handleVerify = async (id: string) => {
     setRequests((prev) =>
       prev.map((r) => (r.id === id ? { ...r, verificationStatus: 'verified' } : r))
     );
@@ -72,10 +212,21 @@ export default function CoordinatorOperationsPage() {
     };
     setAuditLogs((prev) => [log, ...prev]);
     showToast(`✓ Request ${id} verified. Priority score active in dispatch queue.`);
+
+    // Persist to Neon DB
+    try {
+      await fetch('/api/requests', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, verificationStatus: 'verified' }),
+      });
+    } catch (err) {
+      console.error('Failed to persist verification to Neon DB:', err);
+    }
   };
 
   // 2. Stock-Aware Resource Allocation
-  const handleAllocate = (id: string) => {
+  const handleAllocate = async (id: string) => {
     const req = requests.find((r) => r.id === id);
     if (!req) return;
 
@@ -98,10 +249,28 @@ export default function CoordinatorOperationsPage() {
     };
     setAuditLogs((prev) => [log, ...prev]);
     showToast(result.message);
+
+    // Persist to Neon DB
+    try {
+      await fetch('/api/requests', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id,
+          requestStatus: updatedRequest.requestStatus,
+          allocatedDepotId: updatedRequest.allocatedDepotId,
+          allocatedQty: updatedRequest.allocatedQty,
+          unfulfilledQty: updatedRequest.unfulfilledQty,
+          requestedResources: updatedRequest.requestedResources,
+        }),
+      });
+    } catch (err) {
+      console.error('Failed to persist allocation to Neon DB:', err);
+    }
   };
 
   // 3. Coordinator Priority Override
-  const handleOverrideScore = (id: string, newScore: number, reason: string) => {
+  const handleOverrideScore = async (id: string, newScore: number, reason: string) => {
     setRequests((prev) =>
       prev.map((r) => {
         if (r.id === id) {
@@ -137,10 +306,21 @@ export default function CoordinatorOperationsPage() {
     };
     setAuditLogs((prev) => [log, ...prev]);
     showToast(`✓ Priority score overridden to ${newScore.toFixed(1)}. Reason logged to audit ledger.`);
+
+    // Persist to Neon DB
+    try {
+      await fetch('/api/requests', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, priorityScore: newScore }),
+      });
+    } catch (err) {
+      console.error('Failed to persist override to Neon DB:', err);
+    }
   };
 
   // 4. Reject Request
-  const handleReject = (id: string, reason: string) => {
+  const handleReject = async (id: string, reason: string) => {
     setRequests((prev) =>
       prev.map((r) =>
         r.id === id
@@ -177,10 +357,26 @@ export default function CoordinatorOperationsPage() {
     };
     setAuditLogs((prev) => [log, ...prev]);
     showToast(`Request ${id} marked as rejected. Reason logged to audit ledger.`);
+
+    // Persist to Neon DB
+    try {
+      await fetch('/api/requests', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id,
+          verificationStatus: 'rejected',
+          requestStatus: 'rejected',
+          rejectionReason: reason,
+        }),
+      });
+    } catch (err) {
+      console.error('Failed to persist rejection to Neon DB:', err);
+    }
   };
 
   // 5. Restore Rejected Request
-  const handleRestore = (id: string) => {
+  const handleRestore = async (id: string) => {
     setRequests((prev) =>
       prev.map((r) =>
         r.id === id
@@ -208,6 +404,22 @@ export default function CoordinatorOperationsPage() {
       );
     }
     showToast(`✓ Request ${id} restored to active dispatch queue.`);
+
+    // Persist to Neon DB
+    try {
+      await fetch('/api/requests', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id,
+          verificationStatus: 'verified',
+          requestStatus: 'submitted',
+          rejectionReason: null,
+        }),
+      });
+    } catch (err) {
+      console.error('Failed to persist restore to Neon DB:', err);
+    }
   };
 
   return (
@@ -222,6 +434,32 @@ export default function CoordinatorOperationsPage() {
 
       {/* Active Incident Headline Briefing */}
       <IncidentBriefingBanner />
+
+      {/* Real-time Neon PostgreSQL Live Sync Indicator */}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-1 py-0.5">
+        <div className="flex items-center space-x-2 text-xs">
+          <span className="flex h-2.5 w-2.5 relative items-center justify-center">
+            <span className={`inline-flex rounded-full h-2 w-2 ${isLiveActive ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
+          </span>
+          <span className="font-semibold text-slate-800">
+            {isLiveActive ? 'Live Real-Time SSE Stream Active' : 'Connecting to Real-Time Feed...'}
+          </span>
+          <span className="text-slate-300">•</span>
+          <span className="text-slate-500 font-mono text-[11px]">
+            Neon PostgreSQL • Persistent SSE Stream (Zero Polling) • Last synced: {lastSyncTime ? lastSyncTime.toLocaleTimeString() : 'Connecting...'}
+          </span>
+        </div>
+
+        <button
+          onClick={() => loadInitialRequests(true)}
+          disabled={isRefreshingManually}
+          className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-lg text-xs font-semibold text-slate-700 bg-white border border-slate-200/90 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-2xs disabled:opacity-50"
+          title="Manually trigger immediate Neon PostgreSQL database fetch"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingManually ? 'animate-spin text-blue-600' : 'text-slate-500'}`} />
+          <span>{isRefreshingManually ? 'Syncing...' : 'Sync Now'}</span>
+        </button>
+      </div>
 
       {/* Top Operations KPI Metrics Ribbon */}
       <OperationsSummaryRibbon

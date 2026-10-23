@@ -5,40 +5,41 @@ import { Navigation, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { AccessibilityStatus, SimulatedZoneOption } from '@/lib/types';
 import { SIMULATED_ZONES } from '@/lib/data/initialScenario';
 
-// 1. Primary Flash Flood Inundation Corridor Polygon (Sector 4 River Basin) - Matching Coordinator Map
+// 1. Primary Flash Flood Inundation Corridor Polygon (Mithi River & Kurla Basin) - Matching Coordinator Map
 const FLOOD_INUNDATION_ZONE: [number, number][] = [
-  [34.0670, -118.2340],
-  [34.0620, -118.2215],
-  [34.0545, -118.2155],
-  [34.0435, -118.2175],
-  [34.0340, -118.2260],
-  [34.0325, -118.2345],
-  [34.0395, -118.2380],
-  [34.0470, -118.2315],
-  [34.0545, -118.2310],
-  [34.0615, -118.2370],
+  [19.0835, 72.8755], // Saki Naka / Mithi upper reach
+  [19.0780, 72.8840], // Kurla Kranti Nagar East
+  [19.0690, 72.8860], // Kurla Station lowlands
+  [19.0610, 72.8790], // Mithi River bend at LBS Marg
+  [19.0520, 72.8690], // Dharavi North / Mithi canal
+  [19.0440, 72.8540], // Mahim Creek confluence
+  [19.0400, 72.8450], // Mahim Causeway mouth
+  [19.0480, 72.8510], // Bandra East marsh border
+  [19.0580, 72.8630], // BKC North channel bank
+  [19.0710, 72.8690], // Kalina CST Road lowlands
+  [19.0800, 72.8680], // Santacruz East border
 ];
 
-// 2. Secondary Evacuation Alert & Debris Perimeter Buffer
+// 2. Secondary Evacuation Alert & Debris Perimeter Buffer (Mumbai Central Corridor)
 const EVACUATION_BUFFER_ZONE: [number, number][] = [
-  [34.0735, -118.2430],
-  [34.0665, -118.2120],
-  [34.0515, -118.2040],
-  [34.0375, -118.2080],
-  [34.0255, -118.2240],
-  [34.0260, -118.2440],
-  [34.0415, -118.2480],
-  [34.0600, -118.2480],
+  [19.0930, 72.8710],
+  [19.0830, 72.8930],
+  [19.0660, 72.8980],
+  [19.0490, 72.8790],
+  [19.0340, 72.8560],
+  [19.0370, 72.8370],
+  [19.0540, 72.8470],
+  [19.0760, 72.8540],
 ];
 
-// Realistic Flood Impact Hotspots within Sector 4 Corridor for GPS Simulation
+// Realistic Flood Impact Hotspots within Kurla / Mithi Corridor for GPS Simulation
 const FLOOD_AFFECTED_HOTSPOTS = [
-  { name: '4th St Bridge Underpass (Severely Submerged)', lat: 34.0512, lng: -118.2268 },
-  { name: 'East Riverbed Lowland (Water Depth 4.5ft)', lat: 34.0465, lng: -118.2235 },
-  { name: 'Cesar Chavez Wash (Flash Debris Cutoff)', lat: 34.0578, lng: -118.2280 },
-  { name: 'Olympic Blvd Basin (Isolated Residential Pocket)', lat: 34.0410, lng: -118.2295 },
-  { name: 'Whittier Blvd Inundation Center', lat: 34.0489, lng: -118.2250 },
-  { name: 'North Flood Wash Berm Breach', lat: 34.0620, lng: -118.2310 },
+  { name: 'Kurla Kranti Nagar Mithi Overflow (Water 5ft)', lat: 19.0720, lng: 72.8795 },
+  { name: 'Bail Bazar Lowland Underpass (Submerged)', lat: 19.0785, lng: 72.8810 },
+  { name: 'LBS Marg Kurla Depot Junction (Blocked)', lat: 19.0680, lng: 72.8750 },
+  { name: 'Kalina Air India Colony Basin (Isolated)', lat: 19.0740, lng: 72.8660 },
+  { name: 'Sion Railway Underpass & Gandhi Market', lat: 19.0410, lng: 72.8620 },
+  { name: 'Dharavi 90-Feet Road Canal Breach', lat: 19.0490, lng: 72.8550 },
 ];
 
 interface LocationMapPickerProps {

@@ -10,6 +10,7 @@ import {
   ReliefRequest,
 } from '@/lib/types';
 
+
 // Map database row to frontend ReliefRequest type
 export function formatDbRequest(row: {
   id: string;
@@ -84,6 +85,19 @@ export function formatDbRequest(row: {
   };
 }
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: CORS_HEADERS,
+  });
+}
+
 // GET /api/requests - Fetch all requests from Neon PostgreSQL
 export async function GET(request: Request) {
   try {
@@ -102,11 +116,11 @@ export async function GET(request: Request) {
       take: limit,
     });
 
-    return NextResponse.json(rows.map(formatDbRequest));
+    return NextResponse.json(rows.map(formatDbRequest), { headers: CORS_HEADERS });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Database fetch error';
     console.error('Error fetching relief requests from Neon:', err);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 500, headers: CORS_HEADERS });
   }
 }
 
@@ -230,10 +244,66 @@ export async function POST(request: Request) {
     console.log(`[ResQGrid DB] Successfully persisted ${newId} to Neon PostgreSQL with Priority Score ${scoreBreakdown.totalScore}`);
 
     const result = formatDbRequest(savedRow);
-    return NextResponse.json(result, { status: 201 });
+
+    // Stream event directly to Coordinator Portal Realtime SSE channel
+    try {
+      fetch('http://localhost:3000/api/requests/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'NEW_REQUEST', data: result }),
+      }).catch(() => {});
+    } catch (_) {}
+
+    return NextResponse.json(result, { status: 201, headers: CORS_HEADERS });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Database insertion error';
     console.error('[ResQGrid API] Submission error:', err);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 500, headers: CORS_HEADERS });
+  }
+}
+
+// PATCH /api/requests - Update request status / allocation in Neon
+export async function PATCH(request: Request) {
+  try {
+    const body = await request.json();
+    const { 
+      id, 
+      verificationStatus, 
+      requestStatus, 
+      allocatedDepotId, 
+      allocatedQty, 
+      unfulfilledQty,
+      requestedResources,
+      priorityScore,
+      rejectionReason,
+      notes,
+      waitingMinutes,
+    } = body;
+
+    if (!id) {
+      return NextResponse.json({ error: 'Request ID is required' }, { status: 400, headers: CORS_HEADERS });
+    }
+
+    const updateData: Record<string, unknown> = {};
+    if (verificationStatus !== undefined) updateData.verificationStatus = verificationStatus;
+    if (requestStatus !== undefined) updateData.requestStatus = requestStatus;
+    if (allocatedDepotId !== undefined) updateData.allocatedDepotId = allocatedDepotId;
+    if (allocatedQty !== undefined) updateData.allocatedQty = allocatedQty;
+    if (unfulfilledQty !== undefined) updateData.unfulfilledQty = unfulfilledQty;
+    if (requestedResources !== undefined) updateData.requestedResources = requestedResources;
+    if (priorityScore !== undefined) updateData.priorityScore = priorityScore;
+    if (rejectionReason !== undefined) updateData.rejectionReason = rejectionReason;
+    if (notes !== undefined) updateData.notes = notes;
+    if (waitingMinutes !== undefined) updateData.waitingMinutes = waitingMinutes;
+
+    const updated = await db.reliefRequest.update({
+      where: { id },
+      data: updateData,
+    });
+
+    return NextResponse.json(formatDbRequest(updated), { headers: CORS_HEADERS });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Update failed';
+    return NextResponse.json({ error: message }, { status: 500, headers: CORS_HEADERS });
   }
 }

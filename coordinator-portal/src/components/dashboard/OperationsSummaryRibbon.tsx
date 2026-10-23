@@ -74,7 +74,7 @@ export default function OperationsSummaryRibbon({
             <span className="text-3xl font-extrabold text-rose-600 font-mono tracking-tight">
               {criticalCount}
             </span>
-            <span className="w-2 h-2 rounded-full bg-rose-600 animate-pulse" />
+            <span className="w-2 h-2 rounded-full bg-rose-600" />
           </div>
           <span className="text-[11px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200">
             Immediate Response

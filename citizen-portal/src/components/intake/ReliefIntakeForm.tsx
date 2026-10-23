@@ -192,7 +192,26 @@ export default function ReliefIntakeForm() {
       // 2. Log detailed audit record to console
       logTriageAndScore(persistedRequest);
 
-      // 3. Update client store & trigger success modal
+      // 3. Broadcast to all open tabs and cross-service coordinator
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        try {
+          const bc = new BroadcastChannel('resqgrid_realtime');
+          bc.postMessage({ type: 'NEW_REQUEST_SUBMITTED', request: persistedRequest });
+          bc.close();
+        } catch (_) {}
+      }
+
+      // Fire cross-origin ping to coordinator portal server (port 3000)
+      try {
+        fetch('http://localhost:3000/api/requests/sync', {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event: 'NEW_REQUEST_SUBMITTED', id: persistedRequest.id }),
+        }).catch(() => {});
+      } catch (_) {}
+
+      // 4. Update client store & trigger success modal
       submitRequest(persistedRequest);
       setCreatedRequest(persistedRequest);
       setIsModalOpen(true);
