@@ -60,6 +60,31 @@ This living document logs all major architectural decisions (ADRs), milestone pr
   2. Prevents route collisions and layout bleed.
   3. Clean root repository managing both applications and unified documentation.
 
+### ADR-006: Humanitarian OpenStreetMap (HOT) Disaster Cartography
+- **Date:** 2026-10-23
+- **Status:** Accepted
+- **Context:** CartoDB unauthenticated tile requests overlay an "API KEY REQUIRED" watermark, and Mapbox requires paid API keys.
+- **Decision:** Utilize **Humanitarian OpenStreetMap (HOT)** tiles (`https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png`) paired with Leaflet vectors and styled custom HTML markers.
+- **Rationale:**
+  1. 100% open and free with zero API key dependencies and zero watermarks.
+  2. Cartography styled specifically for disaster response and humanitarian crisis logistics.
+  3. Supports rich interactive GIS vector overlays (Sector 4 Flash Flood Inundation Polygon and Evacuation Alert Perimeter).
+  4. Fully responsive with client-side dynamic imports and `fitBounds` auto-framing.
+
+### ADR-007: Four-Tier Lifecycle Queue Architecture (Needs Attention, Partially Allocated, Fully Allocated, Rejected)
+- **Date:** 2026-10-23
+- **Status:** Accepted
+- **Context:** Coordinators need an uncluttered operational interface where completed or denied requests don't obscure acute relief emergencies.
+- **Decision:** Segment the priority dispatch queue into four dedicated lifecycle tabs:
+  1. **Needs Attention**: Unallocated raw/verified demands requiring immediate triage & depot assignment.
+  2. **Partially Allocated**: Demands partially fulfilled, with unmet deficits strictly preserved in the queue.
+  3. **Fully Allocated**: 100% fulfilled relief demands archived for audit.
+  4. **Rejected**: Denied, duplicate, or out-of-zone requests with recorded justification and one-click restoration.
+- **Rationale:**
+  1. Drastically reduces cognitive load during high-stress incident response.
+  2. Guarantees that partial stock fulfillment never loses the remaining unmet deficit.
+  3. Maintains a permanent audit ledger of all denials for emergency accountability.
+
 ---
 
 ## Build Milestones & Phase Progress
@@ -69,9 +94,9 @@ This living document logs all major architectural decisions (ADRs), milestone pr
 | **Phase 0** | Scope confirmation, PRD, and Project History initialization | **Completed** | `docs/PRD.md` & `docs/PROJECT_HISTORY.md` established |
 | **Phase 1** | Project Scaffolding & Multi-App Separation (`citizen-portal` & `coordinator-portal`) | **Completed** | Both standalone apps scaffolded with Tailwind v4; root `.gitignore` configured |
 | **Phase 2** | UI Platform 1: Citizen / Volunteer Portal (`citizen-portal`) | **Pending** | Request form with validation & live status tracker |
-| **Phase 3** | UI Platform 2: Command Center Dashboard (`coordinator-portal`) | **Pending** | Dark Leaflet map, prioritized queue, score inspector |
-| **Phase 4** | UI Platform 2: Inventory, Shortage Alert & Replenishment Center | **Pending** | Stock matrix, supplier transit & delivery confirmation |
-| **Phase 5** | Core Prioritization (55/20/15/10) & Stock-Aware Allocation Engines | **Pending** | Full algorithmic calculation & partial fulfillment |
+| **Phase 3** | UI Platform 2: Command Center Dashboard (`coordinator-portal`) | **Completed** | OSM HOT disaster map, flood polygon, 4-tier lifecycle queue, score inspector |
+| **Phase 4** | UI Platform 2: Inventory, Shortage Alert & Replenishment Center | **Completed** | Multi-depot stock matrix, shortage calculator, supplier replenishment dispatch |
+| **Phase 5** | Core Prioritization (55/20/15/10) & Stock-Aware Allocation Engines | **Completed** | Deterministic mathematical scoring, stock reservation, partial fulfillment |
 | **Phase 6** | Neon PostgreSQL + Prisma Integration & Server Route Handlers | **Pending** | Cloud database connection & persistence |
 | **Phase 7** | End-to-End Demo Scenario Controller & Verification | **Pending** | Complete 6-stage hackathon narrative walkthrough |
 
