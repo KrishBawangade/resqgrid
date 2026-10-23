@@ -1,10 +1,5 @@
 // test-realtime-sync.ts
-import { PrismaClient } from '@prisma/client';
-import { PrismaPg } from '@prisma/adapter-pg';
-
-const connectionString = "postgresql://neondb_owner:npg_eXVhS8CI9wMg@ep-purple-night-a1x0r9gt-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require";
-const adapter = new PrismaPg({ connectionString });
-const db = new PrismaClient({ adapter });
+import { db } from '../src/lib/db';
 
 async function run() {
   console.log('--- ResQGrid Real-Time SSE Stream & Cross-Portal Test ---');
