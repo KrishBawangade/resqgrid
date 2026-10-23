@@ -85,6 +85,22 @@ This living document logs all major architectural decisions (ADRs), milestone pr
   2. Guarantees that partial stock fulfillment never loses the remaining unmet deficit.
   3. Maintains a permanent audit ledger of all denials for emergency accountability.
 
+### ADR-008: Dual-Layer AI Natural Language Triage & Anti-Gaming Intake Architecture
+- **Date:** 2026-10-24
+- **Status:** Accepted
+- **Context:** Self-reported checkboxes (e.g. "Select Urgency: Immediate Threat to Life" and demographic checklists) suffer from severe game-theory failure during crises: panicked applicants check every box to get aid first, flooding the queue with false critical tags. Additionally, real citizens in disasters describe situations in unstructured human language rather than bureaucratic codes.
+- **Decision:**
+  1. Strip all gameable inputs (urgency dropdowns, vulnerability checklists) and raw numeric point meters from the public citizen interface.
+  2. Implement multi-resource selection (Drinking Water, Food Rations, Medical Supplies, Shelter Kits) with individual quantity inputs.
+  3. Deploy a server-side **Dual-Engine Triage API** (`/api/triage`) pairing Google Gemini 2.5 Flash with an instant local NLP entity extractor fallback.
+  4. The LLM reads the freeform situation description to assess true hazard urgency, detect demographic vulnerabilities (infants, elderly, casualties, medical facility), and assign subjective `criticalityScore (0-100)` and `vulnerabilityScore (0-100)` with clinical justification notes.
+  5. The deterministic 55/20/15/10 engine combines these AI scores with logarithmic headcount (15%) and anti-starvation waiting time (10%) for a 100% auditable ranking.
+  6. Provide an interactive "🛠️ Demo Mode: Show Algorithmic Inspector" toggle specifically for hackathon judges to inspect the mathematical breakdown on demand.
+- **Rationale:**
+  1. Guarantees triage integrity and eliminates perverse incentives.
+  2. Puts Generative AI in its highest-value role (interpreting unstructured human distress) while preserving deterministic mathematical fairness.
+  3. Guarantees zero downtime during live demos via the local NLP fallback.
+
 ---
 
 ## Build Milestones & Phase Progress
@@ -93,11 +109,12 @@ This living document logs all major architectural decisions (ADRs), milestone pr
 | :--- | :--- | :--- | :--- |
 | **Phase 0** | Scope confirmation, PRD, and Project History initialization | **Completed** | `docs/PRD.md` & `docs/PROJECT_HISTORY.md` established |
 | **Phase 1** | Project Scaffolding & Multi-App Separation (`citizen-portal` & `coordinator-portal`) | **Completed** | Both standalone apps scaffolded with Tailwind v4; root `.gitignore` configured |
-| **Phase 2** | UI Platform 1: Citizen / Volunteer Portal (`citizen-portal`) | **Pending** | Request form with validation & live status tracker |
+| **Phase 2** | UI Platform 1: Citizen / Volunteer Portal (`citizen-portal`) | **Completed** | Streamlined multi-resource intake, AI triage engine, anti-gaming design, and live 6-stage status tracker |
 | **Phase 3** | UI Platform 2: Command Center Dashboard (`coordinator-portal`) | **Completed** | OSM HOT disaster map, flood polygon, 4-tier lifecycle queue, score inspector |
 | **Phase 4** | UI Platform 2: Inventory, Shortage Alert & Replenishment Center | **Completed** | Multi-depot stock matrix, shortage calculator, supplier replenishment dispatch |
 | **Phase 5** | Core Prioritization (55/20/15/10) & Stock-Aware Allocation Engines | **Completed** | Deterministic mathematical scoring, stock reservation, partial fulfillment |
 | **Phase 6** | Neon PostgreSQL + Prisma Integration & Server Route Handlers | **Pending** | Cloud database connection & persistence |
 | **Phase 7** | End-to-End Demo Scenario Controller & Verification | **Pending** | Complete 6-stage hackathon narrative walkthrough |
+
 
 
