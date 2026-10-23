@@ -37,6 +37,18 @@ export default function CoordinatorOperationsPage() {
   const [queueTab, setQueueTab] = useState<QueueTabType>('needs_attention');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Fetch live requests from Neon PostgreSQL database on mount
+  React.useEffect(() => {
+    fetch('/api/requests')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setRequests(data);
+        }
+      })
+      .catch((e) => console.warn('Could not fetch latest requests:', e));
+  }, []);
+
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 4000);

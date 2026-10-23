@@ -1,0 +1,121 @@
+// ResQGrid Prisma Schema
+// Dual-Platform Serverless PostgreSQL Schema for Neon
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// 1. Relief Requests (Intake from Citizen Portal, Dispatched by Coordinator)
+model ReliefRequest {
+  id                    String   @id // e.g. "REQ-1042"
+  timestamp             DateTime @default(now())
+  requesterName         String
+  contactNumber         String
+  resourceType          String   // Primary resource: drinking_water, food_rations, medical_supplies, shelter_kits
+  requestedQty          Int
+  allocatedQty          Int      @default(0)
+  unfulfilledQty        Int
+  requestedResources    Json     // Array of { resourceType, requestedQty, allocatedQty, unfulfilledQty }
+  
+  // Location & Hazard
+  locationZoneName      String
+  locationLat           Float
+  locationLng           Float
+  locationAccessibility String   // flooded_boat_only, debris_delay, accessible
+  
+  // Needs & Vulnerability
+  peopleAffected        Int      @default(1)
+  vulnerability         Json     // { hasChildren: bool, hasElderly: bool, hasInjured: bool, isClinic: bool }
+  urgencyLevel          String   // immediate_threat_to_life, high, moderate, low
+  
+  // Prioritization Engine Breakdown (55/20/15/10)
+  scoreBreakdown        Json     // { criticalityScore, vulnerabilityScore, peopleAffectedScore, waitingTimeScore, totalScore }
+  priorityScore         Float
+  
+  // Lifecycle & Status
+  verificationStatus    String   @default("pending")  // pending, verified, flagged
+  requestStatus         String   @default("submitted") // submitted, queued, partially_allocated, fully_allocated, dispatched, delivered, rejected
+  allocatedDepotId      String?
+  notes                 String?
+  waitingMinutes        Int      @default(0)
+  
+  // AI Triage Audit
+  aiTriageInsight       String?
+  aiConfidence          Float?
+  aiTriageDetails       Json?    // { criticalityScore, criticalityReason, vulnerabilityScore, vulnerabilityReason, engineUsed }
+  rejectionReason       String?
+  
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([requestStatus])
+  @@index([priorityScore])
+  @@index([locationZoneName])
+}
+
+// 2. Relief Depots (Warehouses & Staging Hubs)
+model ReliefDepot {
+  id           String       @id // e.g. "DEPOT-ALPHA"
+  name         String
+  lat          Float
+  lng          Float
+  zoneName     String
+  status       String       @default("operational")
+  stocks       DepotStock[]
+  
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+}
+
+// 3. Stock Level per Resource per Depot
+model DepotStock {
+  id                 String      @id @default(cuid())
+  depotId            String
+  depot              ReliefDepot @relation(fields: [depotId], references: [id], onDelete: Cascade)
+  resourceType       String      // drinking_water, medical_supplies, food_rations, shelter_kits
+  totalStock         Int
+  allocatedStock     Int         @default(0)
+  availableStock     Int
+  lowStockThreshold  Int         @default(50)
+  
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  @@unique([depotId, resourceType])
+  @@index([depotId])
+}
+
+// 4. Supplier Replenishment Orders
+model ReplenishmentOrder {
+  id               String    @id // e.g. "REP-501"
+  resourceType     String
+  quantity         Int
+  supplierName     String
+  targetDepotId    String
+  status           String    @default("requested") // requested, accepted, in_transit, delivered, cancelled
+  requestedAt      DateTime  @default(now())
+  estimatedMinutes Int       @default(45)
+  notes            String?
+  confirmedAt      DateTime?
+  
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([status])
+}
+
+// 5. Immutable Audit Ledger
+model AuditLog {
+  id        String   @id @default(cuid())
+  timestamp DateTime @default(now())
+  action    String   // ALLOCATION, REPLENISHMENT_ORDER, DELIVERY_CONFIRMED, OVERRIDE, TRIAGE
+  actor     String   // "System Coordinator", "Dr. Chen", "Citizen Intake AI"
+  details   String
+  requestId String?
+  
+  @@index([timestamp])
+}

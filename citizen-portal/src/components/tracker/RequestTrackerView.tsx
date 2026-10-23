@@ -18,6 +18,7 @@ import {
   HelpCircle,
   XCircle,
   ExternalLink,
+  Loader2,
 } from 'lucide-react';
 import { ReliefRequest, RequestStatus } from '@/lib/types';
 import { useCitizenStore } from '@/lib/store/useCitizenStore';
@@ -89,6 +90,7 @@ export default function RequestTrackerView() {
   const [searchId, setSearchId] = useState('');
   const [selectedRequest, setSelectedRequest] = useState<ReliefRequest | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isSearchingDb, setIsSearchingDb] = useState(false);
 
   // Check URL query param on mount or change
   useEffect(() => {
@@ -100,7 +102,20 @@ export default function RequestTrackerView() {
         setSelectedRequest(found);
         setErrorMsg(null);
       } else {
-        setErrorMsg(`Request ID "${queryId}" not found in current disaster database.`);
+        // Query Neon PostgreSQL database live
+        fetch(`/api/requests/${encodeURIComponent(queryId.trim().toUpperCase())}`)
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            if (data && data.id) {
+              setSelectedRequest(data);
+              setErrorMsg(null);
+            } else {
+              setErrorMsg(`Request ID "${queryId}" not found in current disaster database.`);
+            }
+          })
+          .catch(() => {
+            setErrorMsg(`Request ID "${queryId}" not found in current disaster database.`);
+          });
       }
     } else if (requests.length > 0 && !selectedRequest) {
       // Default to the first request (e.g. REQ-1042)
@@ -109,17 +124,34 @@ export default function RequestTrackerView() {
     }
   }, [searchParams, requests, getRequestById]);
 
-  const handleSearch = (e?: React.FormEvent) => {
+  const handleSearch = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!searchId.trim()) return;
 
-    const found = getRequestById(searchId.trim());
+    const term = searchId.trim().toUpperCase();
+    const found = getRequestById(term);
     if (found) {
       setSelectedRequest(found);
       setErrorMsg(null);
-    } else {
+      return;
+    }
+
+    setIsSearchingDb(true);
+    try {
+      const res = await fetch(`/api/requests/${encodeURIComponent(term)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSelectedRequest(data);
+        setErrorMsg(null);
+      } else {
+        setSelectedRequest(null);
+        setErrorMsg(`No emergency request found matching "${term}". Please verify your ID.`);
+      }
+    } catch {
       setSelectedRequest(null);
-      setErrorMsg(`No emergency request found matching "${searchId.trim().toUpperCase()}". Please verify your ID.`);
+      setErrorMsg(`No emergency request found matching "${term}". Please verify your ID.`);
+    } finally {
+      setIsSearchingDb(false);
     }
   };
 
@@ -129,6 +161,16 @@ export default function RequestTrackerView() {
     if (found) {
       setSelectedRequest(found);
       setErrorMsg(null);
+    } else {
+      fetch(`/api/requests/${encodeURIComponent(id.trim().toUpperCase())}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data && data.id) {
+            setSelectedRequest(data);
+            setErrorMsg(null);
+          }
+        })
+        .catch(() => {});
     }
   };
 
@@ -168,10 +210,20 @@ export default function RequestTrackerView() {
           </div>
           <button
             type="submit"
-            className="px-6 py-3 rounded-xl bg-blue-600 text-white font-bold text-sm hover:bg-blue-700 transition-colors shadow-xs flex items-center justify-center gap-2"
+            disabled={isSearchingDb}
+            className="px-6 py-3 rounded-xl bg-blue-600 text-white font-bold text-sm hover:bg-blue-700 transition-colors shadow-xs flex items-center justify-center gap-2 disabled:opacity-70"
           >
-            <Search className="w-4 h-4" />
-            <span>Track Request</span>
+            {isSearchingDb ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Checking Database...</span>
+              </>
+            ) : (
+              <>
+                <Search className="w-4 h-4" />
+                <span>Track Request</span>
+              </>
+            )}
           </button>
         </form>
 

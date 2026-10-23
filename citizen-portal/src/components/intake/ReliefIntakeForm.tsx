@@ -164,101 +164,42 @@ export default function ReliefIntakeForm() {
     setIsSubmitting(true);
 
     try {
-      // 1. Call AI Triage API: Evaluates the note, multiple resources, headcount, and sector
-      const triageRes = await fetch('/api/triage', {
+      // 1. Submit to API: Server executes AI Triage and stores outputs directly in Neon PostgreSQL
+      const response = await fetch('/api/requests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          notes: notes.trim(),
-          resources: activeList.map((r) => ({ resourceType: r.resourceType, requestedQty: r.requestedQty })),
-          headcount: Number(headcount) || 1,
+          requesterName: requesterName.trim() || 'Anonymous Resident',
+          contactNumber: contactNumber.trim() || 'Unspecified Contact',
           zoneName: currentZone.zoneName,
+          customCoords: customCoords || { lat: currentZone.lat, lng: currentZone.lng },
+          headcount: Number(headcount) || 1,
+          resources: activeList.map((r) => ({
+            resourceType: r.resourceType,
+            requestedQty: r.requestedQty,
+          })),
+          notes: notes.trim(),
         }),
       });
 
-      if (!triageRes.ok) {
-        throw new Error('AI Triage failed to process request');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to submit relief request to database');
       }
 
-      const triageData = await triageRes.json();
+      const persistedRequest: ReliefRequest = await response.json();
 
-      const primaryRes = triageData.primaryResourceType || activeList[0].resourceType;
-      const urgency: UrgencyLevel = triageData.urgencyLevel || 'moderate';
-      const vulnFactors: VulnerabilityFactors = triageData.vulnerability || {
-        hasChildren: false,
-        hasElderly: false,
-        hasInjured: false,
-        isClinic: false,
-      };
+      // 2. Log detailed audit record to console
+      logTriageAndScore(persistedRequest);
 
-      // 2. Compute 55/20/15/10 deterministic score using AI subjective evaluations
-      const scoreBreakdown = computePriorityScore(
-        primaryRes,
-        urgency,
-        vulnFactors,
-        Number(headcount) || 1,
-        0,
-        {
-          criticalityScore: triageData.criticalityScore,
-          vulnerabilityScore: triageData.vulnerabilityScore,
-        }
-      );
-
-      // 3. Generate Unique Request ID (REQ-XXXX)
-      const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-      const newId = `REQ-${randomSuffix}`;
-
-      // Sum total quantity for primary legacy compatibility
-      const primaryItem = activeList.find((r) => r.resourceType === primaryRes) || activeList[0];
-
-      const newRequest: ReliefRequest = {
-        id: newId,
-        timestamp: new Date().toISOString(),
-        requesterName: requesterName.trim() || 'Anonymous Resident',
-        contactNumber: contactNumber.trim() || 'Unspecified Contact',
-        resourceType: primaryRes,
-        requestedQty: primaryItem.requestedQty,
-        allocatedQty: 0,
-        unfulfilledQty: primaryItem.requestedQty,
-        requestedResources: activeList,
-        location: {
-          zoneName: currentZone.zoneName,
-          lat: customCoords?.lat ?? currentZone.lat,
-          lng: customCoords?.lng ?? currentZone.lng,
-          isSimulated: true,
-          accessibility: currentZone.accessibility,
-        },
-        peopleAffected: Number(headcount) || 1,
-        vulnerability: vulnFactors,
-        urgencyLevel: urgency,
-        scoreBreakdown,
-        priorityScore: scoreBreakdown.totalScore,
-        verificationStatus: 'pending',
-        requestStatus: 'submitted',
-        allocatedDepotId: null,
-        notes: notes.trim() || undefined,
-        waitingMinutes: 0,
-        aiTriageInsight: triageData.aiTriageInsight || undefined,
-        aiConfidence: triageData.aiConfidence || undefined,
-        aiTriageDetails: {
-          criticalityScore: triageData.criticalityScore,
-          criticalityReason: triageData.criticalityReason,
-          vulnerabilityScore: triageData.vulnerabilityScore,
-          vulnerabilityReason: triageData.vulnerabilityReason,
-          engineUsed: triageData.engineUsed,
-        },
-      };
-
-      // 4. Log detailed audit record to console
-      logTriageAndScore(newRequest);
-
-      // 5. Save and open confirmation modal
-      submitRequest(newRequest);
-      setCreatedRequest(newRequest);
+      // 3. Update client store & trigger success modal
+      submitRequest(persistedRequest);
+      setCreatedRequest(persistedRequest);
       setIsModalOpen(true);
     } catch (err: unknown) {
       console.error('Submission error:', err);
-      setErrorMessage('Failed to submit relief request. Please try again.');
+      const message = err instanceof Error ? err.message : 'Failed to submit relief request. Please try again.';
+      setErrorMessage(message);
     } finally {
       setIsSubmitting(false);
     }

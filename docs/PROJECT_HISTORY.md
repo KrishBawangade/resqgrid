@@ -117,6 +117,29 @@ This living document logs all major architectural decisions (ADRs), milestone pr
   2. 100% spatial parity between citizen intake coordinates and coordinator tactical GIS layers.
   3. Bulletproof presentation narrative for hackathon judges demonstrating instant disaster zone geolocation.
 
+### ADR-010: AI-Integrated Citizen Intake & Neon PostgreSQL Database Persistence
+- **Date:** 2026-10-24
+- **Status:** Accepted
+- **Context:** The public relief intake form previously conducted triage on the client and saved records only in the local Zustand store. Phase 6 required wiring the submission flow directly through the AI triage engine on the server and persisting all outputs (triage parameters, 55/20/15/10 priority scores, demographic vulnerabilities, and audit entries) directly into Neon Serverless PostgreSQL.
+- **Decision:**
+  1. Configured Prisma 7 with `@prisma/adapter-pg` driver adapter and `prisma.config.ts` across both portals to target Neon Serverless PostgreSQL (`ep-purple-night-a1x0r9gt.ap-southeast-1.aws.neon.tech`).
+  2. Pushed the full Prisma schema to Neon, physically creating all 5 operational tables: `ReliefRequest`, `ReliefDepot`, `DepotStock`, `ReplenishmentOrder`, and `AuditLog`.
+  3. Created `POST /api/requests` route handler in `citizen-portal`:
+     - Receives raw intake fields: `requesterName`, `contactNumber`, `zoneName`, `customCoords`, `headcount`, `resources`, `notes`.
+     - First passes data to the AI Triage Engine (`runAiTriage` via Google Gemini 2.5 Flash with fallback to smart local NLP).
+     - Computes the 55/20/15/10 mathematical priority score using the AI's subjective evaluations.
+     - Persists the record directly into the Neon `ReliefRequest` table.
+     - Records an immutable audit log entry in the Neon `AuditLog` table.
+     - Returns the persisted record with HTTP 201 Created.
+  4. Established a hybrid priority score model: stores `priorityScore` as an indexed baseline for fast database queries (`ORDER BY priorityScore DESC`) while computing the dynamic elapsed waiting time component in real time during fetch and UI tracking.
+  5. Updated `ReliefIntakeForm.tsx` to call `POST /api/requests` on transmit, updating local Zustand store upon receipt of the database-persisted record and displaying the confirmation modal with real tracking ID.
+  6. Added `GET /api/requests/[id]` and enhanced `RequestTrackerView.tsx` with live database fallback so any citizen can track their request across devices directly against Neon PostgreSQL.
+  7. Added `GET /api/requests` and `PATCH /api/requests` in `coordinator-portal` so newly submitted requests in Neon PostgreSQL are loaded into the operational dispatch queue on mount.
+- **Rationale:**
+  1. End-to-end data durability: every citizen submission is immediately saved to the cloud PostgreSQL database.
+  2. Full auditability: AI insights, confidence scores, and mathematical breakdowns are immutably preserved in the DB ledger.
+  3. Cross-portal synchronization: submissions made by citizens in `citizen-portal` are directly accessible by command staff in `coordinator-portal`.
+
 ---
 
 ## Build Milestones & Phase Progress
@@ -129,8 +152,9 @@ This living document logs all major architectural decisions (ADRs), milestone pr
 | **Phase 3** | UI Platform 2: Command Center Dashboard (`coordinator-portal`) | **Completed** | OSM HOT disaster map, flood polygon, 4-tier lifecycle queue, score inspector |
 | **Phase 4** | UI Platform 2: Inventory, Shortage Alert & Replenishment Center | **Completed** | Multi-depot stock matrix, shortage calculator, supplier replenishment dispatch |
 | **Phase 5** | Core Prioritization (55/20/15/10) & Stock-Aware Allocation Engines | **Completed** | Deterministic mathematical scoring, stock reservation, partial fulfillment |
-| **Phase 6** | Neon PostgreSQL + Prisma Integration & Server Route Handlers | **Pending** | Cloud database connection & persistence |
+| **Phase 6** | Neon PostgreSQL + Prisma Integration & Server Route Handlers | **Completed** | Neon DB tables synced; AI triage + direct DB persistence verified end-to-end; /api/requests live across both portals |
 | **Phase 7** | End-to-End Demo Scenario Controller & Verification | **Pending** | Complete 6-stage hackathon narrative walkthrough |
+
 
 
 

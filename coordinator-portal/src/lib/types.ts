@@ -65,6 +65,12 @@ export interface ReliefRequest {
   requestedQty: number;
   allocatedQty: number;
   unfulfilledQty: number;
+  requestedResources?: Array<{
+    resourceType: ResourceType;
+    requestedQty: number;
+    allocatedQty: number;
+    unfulfilledQty: number;
+  }>;
   location: LocationData;
   peopleAffected: number;
   vulnerability: VulnerabilityFactors;
@@ -79,6 +85,16 @@ export interface ReliefRequest {
   waitingMinutes: number;
   rejectionReason?: string;
   rejectedAt?: string;
+  aiTriageInsight?: string;
+  aiConfidence?: number;
+  aiTriageDetails?: {
+    criticalityScore?: number;
+    criticalityReason?: string;
+    vulnerabilityScore?: number;
+    vulnerabilityReason?: string;
+    recommendedDispatch?: string;
+    engineUsed?: 'gemini-llm' | 'local-nlp';
+  };
 }
 
 export interface InventoryItem {
