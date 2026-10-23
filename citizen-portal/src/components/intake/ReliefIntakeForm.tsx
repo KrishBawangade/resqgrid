@@ -28,9 +28,23 @@ import {
   ReliefRequest,
 } from '@/lib/types';
 import { SIMULATED_ZONES } from '@/lib/data/initialScenario';
-import { computePriorityScore } from '@/lib/engines/prioritization';
+import { computePriorityScore, logTriageAndScore } from '@/lib/engines/prioritization';
 import { useCitizenStore } from '@/lib/store/useCitizenStore';
+import dynamic from 'next/dynamic';
 import SubmissionSuccessModal from './SubmissionSuccessModal';
+
+const LocationMapPicker = dynamic(
+  () => import('./LocationMapPicker'),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-64 sm:h-72 w-full rounded-xl border border-slate-300 bg-slate-100 flex flex-col items-center justify-center gap-2 text-xs text-slate-500 font-medium">
+        <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+        <span>Loading Interactive Disaster Cartography...</span>
+      </div>
+    ),
+  }
+);
 
 interface ResourceSelection {
   resourceType: ResourceType;
@@ -48,6 +62,7 @@ export default function ReliefIntakeForm() {
   const [requesterName, setRequesterName] = useState('');
   const [contactNumber, setContactNumber] = useState('');
   const [selectedZoneName, setSelectedZoneName] = useState(SIMULATED_ZONES[0].zoneName);
+  const [customCoords, setCustomCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [headcount, setHeadcount] = useState<number>(25);
   const [notes, setNotes] = useState('');
 
@@ -121,8 +136,28 @@ export default function ReliefIntakeForm() {
         unfulfilledQty: val.qty,
       }));
 
+    if (!requesterName.trim()) {
+      setErrorMessage('Please enter your full name or representative role for responder contact.');
+      return;
+    }
+
+    if (!contactNumber.trim()) {
+      setErrorMessage('Please enter a reachable contact phone number or radio call sign.');
+      return;
+    }
+
     if (activeList.length === 0) {
       setErrorMessage('Please select at least one emergency resource.');
+      return;
+    }
+
+    if (!headcount || headcount < 1) {
+      setErrorMessage('Please enter a valid headcount of individuals in need (minimum 1).');
+      return;
+    }
+
+    if (!notes.trim() || notes.trim().length < 10) {
+      setErrorMessage('Please provide a descriptive situation note (minimum 10 characters) so the triage AI can assess urgency.');
       return;
     }
 
@@ -188,8 +223,8 @@ export default function ReliefIntakeForm() {
         requestedResources: activeList,
         location: {
           zoneName: currentZone.zoneName,
-          lat: currentZone.lat,
-          lng: currentZone.lng,
+          lat: customCoords?.lat ?? currentZone.lat,
+          lng: customCoords?.lng ?? currentZone.lng,
           isSimulated: true,
           accessibility: currentZone.accessibility,
         },
@@ -214,7 +249,10 @@ export default function ReliefIntakeForm() {
         },
       };
 
-      // 4. Save and open confirmation modal
+      // 4. Log detailed audit record to console
+      logTriageAndScore(newRequest);
+
+      // 5. Save and open confirmation modal
       submitRequest(newRequest);
       setCreatedRequest(newRequest);
       setIsModalOpen(true);
@@ -291,15 +329,20 @@ export default function ReliefIntakeForm() {
           <div className="lg:col-span-2 space-y-6">
             {/* Section A: Requester Details & Sector */}
             <div className="bg-white rounded-2xl p-6 border border-slate-200/90 shadow-xs space-y-4">
-              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <MapPin className="w-4 h-4 text-blue-600" />
-                <span>Contact Details & Location</span>
-              </h3>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <MapPin className="w-4 h-4 text-blue-600" />
+                  <span>Contact Details & Location</span>
+                </h3>
+                <span className="text-xs text-slate-500 font-medium">
+                  Fields with <span className="text-rose-600 font-bold">*</span> are mandatory
+                </span>
+              </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Your Name / Representative Role
+                    Your Name / Representative Role <span className="text-rose-600 font-bold">*</span>
                   </label>
                   <input
                     type="text"
@@ -313,7 +356,7 @@ export default function ReliefIntakeForm() {
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Contact Phone / Radio Call Sign
+                    Contact Phone / Radio Call Sign <span className="text-rose-600 font-bold">*</span>
                   </label>
                   <input
                     type="text"
@@ -326,36 +369,17 @@ export default function ReliefIntakeForm() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Select Disaster Sector (Anchored Coordinates)
+              <div className="pt-1">
+                <label className="block text-xs font-semibold text-slate-700 mb-2">
+                  Select Disaster Location on Interactive Map <span className="text-rose-600 font-bold">*</span>
                 </label>
-                <select
-                  value={selectedZoneName}
-                  onChange={(e) => setSelectedZoneName(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 p-2.5 text-sm font-medium text-slate-900 bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:outline-hidden"
-                >
-                  {SIMULATED_ZONES.map((zone) => (
-                    <option key={zone.zoneName} value={zone.zoneName}>
-                      {zone.zoneName}
-                    </option>
-                  ))}
-                </select>
-
-                <div className="mt-2.5 p-3 rounded-lg bg-slate-50 border border-slate-200/80 text-xs flex items-center justify-between flex-wrap gap-2">
-                  <span className="text-slate-600">{currentZone.description}</span>
-                  <span
-                    className={`font-semibold px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider ${
-                      currentZone.accessibility === 'flooded_boat_only'
-                        ? 'bg-rose-100 text-rose-800 border border-rose-200'
-                        : currentZone.accessibility === 'debris_delay'
-                        ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                        : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                    }`}
-                  >
-                    {currentZone.accessibility.replace(/_/g, ' ')}
-                  </span>
-                </div>
+                <LocationMapPicker
+                  selectedZoneName={selectedZoneName}
+                  onLocationChange={(loc) => {
+                    setSelectedZoneName(loc.zoneName);
+                    setCustomCoords({ lat: loc.lat, lng: loc.lng });
+                  }}
+                />
               </div>
             </div>
 
@@ -364,7 +388,7 @@ export default function ReliefIntakeForm() {
               <div className="flex items-center justify-between">
                 <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                   <Droplets className="w-4 h-4 text-blue-600" />
-                  <span>Needed Resources (Select all that apply)</span>
+                  <span>Needed Resources (Select at least 1) <span className="text-rose-600 font-bold">*</span></span>
                 </h3>
                 <span className="text-xs text-slate-500">
                   Select multiple items if needed
@@ -457,7 +481,7 @@ export default function ReliefIntakeForm() {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Total Headcount (Persons Affected)
+                  Total Headcount (Persons in Need) <span className="text-rose-600 font-bold">*</span>
                 </label>
                 <div className="flex items-center gap-3">
                   <input
@@ -481,7 +505,7 @@ export default function ReliefIntakeForm() {
               <div>
                 <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                   <FileText className="w-4 h-4 text-blue-600" />
-                  <span>Emergency Situation & Field Notes</span>
+                  <span>Emergency Situation & Field Notes <span className="text-rose-600 font-bold">*</span></span>
                 </h3>
                 <p className="text-xs text-slate-500 mt-1">
                   Describe your exact situation. Our AI triage system analyzes your description to evaluate demographic vulnerability (e.g. infants, elderly, injured, clinic) and hazard urgency.

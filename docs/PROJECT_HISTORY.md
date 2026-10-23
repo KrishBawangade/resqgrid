@@ -101,6 +101,22 @@ This living document logs all major architectural decisions (ADRs), milestone pr
   2. Puts Generative AI in its highest-value role (interpreting unstructured human distress) while preserving deterministic mathematical fairness.
   3. Guarantees zero downtime during live demos via the local NLP fallback.
 
+### ADR-009: Interactive Citizen Cartography with Flood-Zone GPS Simulation
+- **Date:** 2026-10-24
+- **Status:** Accepted
+- **Context:** Rather than forcing citizens in distress to choose from an administrative list of operational sectors or manually enter coordinates, the public intake form needed an intuitive, visual location selection method matching the coordinator tactical map. In addition, the platform required a realistic GPS simulation for demo testing that places users directly inside the active flood hazard zone.
+- **Decision:**
+  1. Replace static sector dropdowns with an interactive Leaflet cartography component (`LocationMapPicker.tsx`) directly embedded in the intake form.
+  2. Render the identical **Sector 4 Flash Flood Inundation Polygon** (red dashed boundary with sky-blue fill) and **Advisory Evacuation Buffer** (amber boundary) matching the coordinator tactical map.
+  3. Support click-to-pin and drag-to-place anywhere on the map, with automatic real-time proximity calculation to the nearest operational sector and accessibility hazard detection (`flooded_boat_only`, `debris_delay`, `accessible`).
+  4. Provide a dedicated **"📍 Fetch Current Location"** button simulating device GPS fix: randomly samples realistic flood-impact hotspots within the Sector 4 flood corridor (e.g., 4th St Bridge Underpass, East Riverbed Lowland, Cesar Chavez Wash, Olympic Blvd Basin) with microscopic coordinate jitter.
+  5. Implement `ResizeObserver` and automated staggered `map.invalidateSize()` triggers to eliminate Leaflet tile clipping across dynamic Next.js responsive layouts.
+  6. Remove redundant preset sector buttons to maintain a clean, frictionless citizen user experience.
+- **Rationale:**
+  1. High usability: citizens or field volunteers tap directly on the map or click one button to acquire an immediate GPS fix.
+  2. 100% spatial parity between citizen intake coordinates and coordinator tactical GIS layers.
+  3. Bulletproof presentation narrative for hackathon judges demonstrating instant disaster zone geolocation.
+
 ---
 
 ## Build Milestones & Phase Progress
@@ -109,7 +125,7 @@ This living document logs all major architectural decisions (ADRs), milestone pr
 | :--- | :--- | :--- | :--- |
 | **Phase 0** | Scope confirmation, PRD, and Project History initialization | **Completed** | `docs/PRD.md` & `docs/PROJECT_HISTORY.md` established |
 | **Phase 1** | Project Scaffolding & Multi-App Separation (`citizen-portal` & `coordinator-portal`) | **Completed** | Both standalone apps scaffolded with Tailwind v4; root `.gitignore` configured |
-| **Phase 2** | UI Platform 1: Citizen / Volunteer Portal (`citizen-portal`) | **Completed** | Streamlined multi-resource intake, AI triage engine, anti-gaming design, and live 6-stage status tracker |
+| **Phase 2** | UI Platform 1: Citizen / Volunteer Portal (`citizen-portal`) | **Completed** | Multi-resource intake, AI triage engine, interactive Leaflet map picker with flood-zone GPS fetch, anti-gaming design, and live 6-stage status tracker |
 | **Phase 3** | UI Platform 2: Command Center Dashboard (`coordinator-portal`) | **Completed** | OSM HOT disaster map, flood polygon, 4-tier lifecycle queue, score inspector |
 | **Phase 4** | UI Platform 2: Inventory, Shortage Alert & Replenishment Center | **Completed** | Multi-depot stock matrix, shortage calculator, supplier replenishment dispatch |
 | **Phase 5** | Core Prioritization (55/20/15/10) & Stock-Aware Allocation Engines | **Completed** | Deterministic mathematical scoring, stock reservation, partial fulfillment |

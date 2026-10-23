@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
 
 :root {
   --background: #f8fafc;
@@ -17,6 +18,45 @@ body {
   color: var(--foreground);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Leaflet map custom fixes for crisp light mode */
+.leaflet-container {
+  font-family: inherit;
+  background-color: #f1f5f9;
+  z-index: 10;
+  width: 100% !important;
+}
+
+.leaflet-container img {
+  max-width: none !important;
+  max-height: none !important;
+}
+
+.leaflet-tile {
+  max-width: none !important;
+  max-height: none !important;
+}
+
+.leaflet-popup-content-wrapper {
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  border-radius: 0.75rem;
+  border: 1px solid #e2e8f0;
+}
+
+.leaflet-popup-tip {
+  background: #ffffff;
+}
+
+/* Custom Leaflet divIcon transparent reset */
+.custom-depot-pin,
+.custom-request-pin,
+.custom-hazard-label,
+.custom-location-pin {
+  background: transparent !important;
+  border: none !important;
 }
 
 /* Custom scrollbars */
