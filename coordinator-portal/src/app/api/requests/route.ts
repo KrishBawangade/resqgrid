@@ -156,6 +156,36 @@ export async function PATCH(request: Request) {
       data: updateData,
     });
 
+    // Synchronize depot stock if allocation delta is provided
+    if (body.depotAllocation) {
+      try {
+        const { depotId, resourceType, quantity } = body.depotAllocation;
+        if (depotId && resourceType && typeof quantity === 'number' && quantity > 0) {
+          const currentStock = await db.depotStock.findUnique({
+            where: {
+              depotId_resourceType: { depotId, resourceType },
+            },
+          });
+          if (currentStock) {
+            await db.depotStock.update({
+              where: {
+                depotId_resourceType: { depotId, resourceType },
+              },
+              data: {
+                availableStock: Math.max(0, currentStock.availableStock - quantity),
+                allocatedStock: currentStock.allocatedStock + quantity,
+              },
+            });
+            const { getFormattedDepots } = await import('@/app/api/depots/route');
+            const updatedDepots = await getFormattedDepots();
+            broadcastRealtimeEvent('DEPOTS_UPDATED', updatedDepots);
+          }
+        }
+      } catch (depotSyncErr) {
+        console.error('Error synchronizing depot stock in request PATCH:', depotSyncErr);
+      }
+    }
+
     const formatted = formatDbRequest(updated);
     broadcastRealtimeEvent('REQUEST_UPDATED', formatted);
 

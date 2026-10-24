@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { 
@@ -15,6 +15,78 @@ import {
 
 export default function CoordinatorHeader() {
   const pathname = usePathname();
+  const [hasShortage, setHasShortage] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const checkShortageStatus = async () => {
+      try {
+        const [depotsRes, reqsRes, repRes] = await Promise.all([
+          fetch('/api/depots', { cache: 'no-store' }),
+          fetch('/api/requests', { cache: 'no-store' }),
+          fetch('/api/replenishment', { cache: 'no-store' }),
+        ]);
+
+        if (depotsRes.ok && reqsRes.ok) {
+          const depots = await depotsRes.json();
+          const requests = await reqsRes.json();
+          const replenishments = repRes.ok ? await repRes.json() : [];
+
+          const activeRequests = Array.isArray(requests)
+            ? requests.filter((r: any) => r.requestStatus !== 'rejected' && r.requestStatus !== 'delivered')
+            : [];
+
+          const resourceTypes = ['drinking_water', 'food_rations', 'medical_supplies', 'shelter_kits'];
+          const isAnyResourceInShortage = resourceTypes.some((type) => {
+            const unfulfilled = activeRequests
+              .filter((r: any) => r.resourceType === type)
+              .reduce((sum: number, r: any) => sum + (r.unfulfilledQty || 0), 0);
+            const available = Array.isArray(depots)
+              ? depots.reduce((sum: number, d: any) => sum + (d.inventory?.[type]?.availableStock ?? 0), 0)
+              : 0;
+
+            const hasInTransitRestock = Array.isArray(replenishments)
+              && replenishments.some((r: any) => r.resourceType === type && r.status === 'in_transit');
+
+            return unfulfilled > available && !hasInTransitRestock;
+          });
+
+          if (isMounted) setHasShortage(isAnyResourceInShortage);
+        }
+      } catch {
+        // Silently preserve state on fetch errors
+      }
+    };
+
+    checkShortageStatus();
+
+    // Cross-tab real-time sync
+    let channel: BroadcastChannel | null = null;
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        channel = new BroadcastChannel('resqgrid_realtime');
+        channel.onmessage = () => {
+          checkShortageStatus();
+        };
+      } catch {}
+    }
+
+    // Server-sent events listener
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource('/api/requests/stream');
+      eventSource.onmessage = () => {
+        checkShortageStatus();
+      };
+    } catch {}
+
+    return () => {
+      isMounted = false;
+      if (channel) channel.close();
+      if (eventSource) eventSource.close();
+    };
+  }, []);
 
   return (
     <header className="sticky top-0 z-40 bg-white/90 backdrop-blur-md border-b border-slate-200/80 shadow-2xs">
@@ -60,11 +132,13 @@ export default function CoordinatorHeader() {
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
             }`}
           >
-            <Boxes className="w-3.5 h-3.5 text-amber-600" />
+            <Boxes className={`w-3.5 h-3.5 ${hasShortage ? 'text-amber-600' : 'text-blue-600'}`} />
             <span>Depot Inventory</span>
-            <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 font-bold border border-amber-200">
-              Shortage
-            </span>
+            {hasShortage && (
+              <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 font-bold border border-amber-200 animate-pulse">
+                Shortage
+              </span>
+            )}
           </Link>
 
           <Link

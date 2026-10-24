@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { ReliefRequest, ReliefDepot } from '@/lib/types';
 import { 
@@ -21,7 +22,8 @@ import {
   Building2,
   Ban,
   XCircle,
-  RotateCcw
+  RotateCcw,
+  Truck
 } from 'lucide-react';
 
 interface ScoreInspectorDrawerProps {
@@ -32,6 +34,8 @@ interface ScoreInspectorDrawerProps {
   onSelectRequest: (req: ReliefRequest) => void;
   onVerify: (id: string) => void;
   onAllocate: (id: string) => void;
+  onDispatch?: (id: string) => void;
+  onDeliver?: (id: string) => void;
   onOverrideScore: (id: string, newScore: number, reason: string) => void;
   onReject?: (id: string, reason: string) => void;
   onRestore?: (id: string) => void;
@@ -45,6 +49,8 @@ export default function ScoreInspectorDrawer({
   onSelectRequest,
   onVerify,
   onAllocate,
+  onDispatch,
+  onDeliver,
   onOverrideScore,
   onReject,
   onRestore,
@@ -414,8 +420,14 @@ export default function ScoreInspectorDrawer({
                     );
                   })
                 ) : (
-                  <div className="text-[11px] text-rose-600 bg-rose-50 p-2 rounded-lg border border-rose-200">
-                    No active depots currently hold available stock for this resource.
+                  <div className="text-[11px] text-rose-700 bg-rose-50 p-2.5 rounded-lg border border-rose-200 space-y-1">
+                    <div className="font-semibold">Zero available stock across active depots for this resource.</div>
+                    <Link
+                      href="/inventory"
+                      className="inline-flex items-center space-x-1 text-blue-700 font-bold hover:underline"
+                    >
+                      <span>Issue Supplier Replenishment Order &rarr;</span>
+                    </Link>
                   </div>
                 )}
               </div>
@@ -424,7 +436,7 @@ export default function ScoreInspectorDrawer({
         )}
 
         {/* Action Controls Section */}
-        <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2.5">
+        <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
           {isRejected ? (
             <button
               onClick={() => onRestore && onRestore(request.id)}
@@ -438,30 +450,71 @@ export default function ScoreInspectorDrawer({
               {request.verificationStatus === 'pending' ? (
                 <button
                   onClick={() => onVerify(request.id)}
-                  className="flex-1 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center justify-center space-x-1.5 cursor-pointer"
+                  className="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center justify-center space-x-1.5 cursor-pointer flex-1"
                 >
                   <CheckCircle2 className="w-4 h-4" />
                   <span>Verify Need</span>
                 </button>
               ) : (
-                <div className="py-2 px-3 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <div className="py-2 px-2.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold flex items-center justify-center space-x-1">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                   <span>Verified</span>
                 </div>
               )}
 
-              <button
-                onClick={() => onAllocate(request.id)}
-                disabled={request.unfulfilledQty === 0}
-                className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
-                  request.unfulfilledQty === 0
-                    ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
-                    : 'bg-blue-600 hover:bg-blue-700 text-white shadow-2xs hover:shadow-xs'
-                }`}
-              >
-                <Boxes className="w-4 h-4" />
-                <span>{request.allocatedQty > 0 ? 'Allocate Remaining' : 'Allocate Stock'}</span>
-              </button>
+              {/* Status Specific Dispatch & Delivery Buttons */}
+              {request.requestStatus === 'delivered' ? (
+                <div className="py-2.5 px-3 bg-emerald-100 text-emerald-900 border border-emerald-300 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 flex-1">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                  <span>Demand 100% Fulfilled</span>
+                </div>
+              ) : request.requestStatus === 'dispatched' ? (
+                <button
+                  onClick={() => onDeliver && onDeliver(request.id)}
+                  className="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center justify-center space-x-1.5 cursor-pointer flex-1"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Confirm Field Delivery</span>
+                </button>
+              ) : request.allocatedQty > 0 && request.unfulfilledQty === 0 ? (
+                <button
+                  onClick={() => onDispatch && onDispatch(request.id)}
+                  className="py-2.5 px-3 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center justify-center space-x-1.5 cursor-pointer flex-1"
+                >
+                  <Truck className="w-4 h-4" />
+                  <span>Dispatch Relief</span>
+                </button>
+              ) : request.allocatedQty > 0 && request.unfulfilledQty > 0 ? (
+                <>
+                  <button
+                    onClick={() => onAllocate(request.id)}
+                    className="py-2.5 px-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center justify-center space-x-1 cursor-pointer flex-1"
+                  >
+                    <Boxes className="w-3.5 h-3.5" />
+                    <span>Allocate Remainder</span>
+                  </button>
+                  <button
+                    onClick={() => onDispatch && onDispatch(request.id)}
+                    className="py-2.5 px-2.5 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center justify-center space-x-1 cursor-pointer flex-1"
+                  >
+                    <Truck className="w-3.5 h-3.5" />
+                    <span>Dispatch ({request.allocatedQty})</span>
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => onAllocate(request.id)}
+                  disabled={request.unfulfilledQty === 0}
+                  className={`py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-1.5 cursor-pointer flex-1 ${
+                    request.unfulfilledQty === 0
+                      ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                      : 'bg-blue-600 hover:bg-blue-700 text-white shadow-2xs hover:shadow-xs'
+                  }`}
+                >
+                  <Boxes className="w-4 h-4" />
+                  <span>Allocate Stock</span>
+                </button>
+              )}
 
               <button
                 onClick={() => setShowRejectModal(true)}

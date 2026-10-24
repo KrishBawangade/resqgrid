@@ -75,24 +75,45 @@ export default function CoordinatorOperationsPage() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // Initial fetch on mount
+  // Initial fetch on mount for requests, depots, and audit trail
   const loadInitialRequests = React.useCallback(async (isManual = false) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     if (isManual) setIsRefreshingManually(true);
 
     try {
-      const res = await fetch('/api/requests', { cache: 'no-store' });
-      if (!res.ok) throw new Error('Failed to fetch requests');
-      const data: ReliefRequest[] = await res.json();
-      if (Array.isArray(data)) {
-        setRequests(data);
-        data.forEach((r) => knownRequestIdsRef.current.add(r.id));
+      const [reqRes, depotsRes, auditRes] = await Promise.all([
+        fetch('/api/requests', { cache: 'no-store' }),
+        fetch('/api/depots', { cache: 'no-store' }),
+        fetch('/api/audit', { cache: 'no-store' }),
+      ]);
+
+      if (reqRes.ok) {
+        const data: ReliefRequest[] = await reqRes.json();
+        if (Array.isArray(data)) {
+          setRequests(data);
+          data.forEach((r) => knownRequestIdsRef.current.add(r.id));
+        }
       }
+
+      if (depotsRes.ok) {
+        const data: ReliefDepot[] = await depotsRes.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setDepots(data);
+        }
+      }
+
+      if (auditRes.ok) {
+        const data: AuditLogEntry[] = await auditRes.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setAuditLogs(data);
+        }
+      }
+
       setIsLiveActive(true);
       setLastSyncTime(new Date());
     } catch (e) {
-      console.warn('Initial request load error:', e);
+      console.warn('Initial data load error:', e);
     } finally {
       isFetchingRef.current = false;
       if (isManual) setIsRefreshingManually(false);
@@ -137,6 +158,15 @@ export default function CoordinatorOperationsPage() {
             setSelectedRequest((curr) =>
               curr && curr.id === updated.id ? { ...curr, ...updated } : curr
             );
+          } else if (payload.type === 'DEPOTS_UPDATED' && payload.data) {
+            const updatedDepots = payload.data as ReliefDepot[];
+            if (Array.isArray(updatedDepots)) {
+              setDepots(updatedDepots);
+              showToast('📦 Real-Time Sync: Depot inventory updated across operational grid.');
+            }
+          } else if (payload.type === 'AUDIT_LOG_ADDED' && payload.data) {
+            const newLog = payload.data as AuditLogEntry;
+            setAuditLogs((prev) => [newLog, ...prev]);
           }
         } catch {
           // Ignored for keepalive ping
@@ -175,6 +205,11 @@ export default function CoordinatorOperationsPage() {
               showToast(`🚨 New Request ${newReq.id} received in ${newReq.location.zoneName}`);
               return [newReq, ...prev];
             });
+          } else if (event.data?.type === 'DEPOTS_UPDATED' && event.data?.data) {
+            setDepots(event.data.data as ReliefDepot[]);
+          } else if (event.data?.type === 'REQUEST_UPDATED' && event.data?.data) {
+            const updated = event.data.data as ReliefRequest;
+            setRequests((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
           }
         };
       } catch (err) {
@@ -250,7 +285,17 @@ export default function CoordinatorOperationsPage() {
     setAuditLogs((prev) => [log, ...prev]);
     showToast(result.message);
 
-    // Persist to Neon DB
+    // Cross-tab broadcast for instant reflect
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const ch = new BroadcastChannel('resqgrid_realtime');
+        ch.postMessage({ type: 'DEPOTS_UPDATED', data: updatedDepots });
+        ch.postMessage({ type: 'REQUEST_UPDATED', data: updatedRequest });
+        ch.close();
+      } catch {}
+    }
+
+    // Persist to Neon DB: both the request and the depot stock levels
     try {
       await fetch('/api/requests', {
         method: 'PATCH',
@@ -262,10 +307,155 @@ export default function CoordinatorOperationsPage() {
           allocatedQty: updatedRequest.allocatedQty,
           unfulfilledQty: updatedRequest.unfulfilledQty,
           requestedResources: updatedRequest.requestedResources,
+          depotAllocation: result.depotId ? {
+            depotId: result.depotId,
+            resourceType: req.resourceType,
+            quantity: result.allocatedQty,
+          } : undefined,
         }),
       });
+
+      if (result.depotId && result.allocatedQty > 0) {
+        await fetch('/api/depots', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'allocate',
+            depotId: result.depotId,
+            resourceType: req.resourceType,
+            quantity: result.allocatedQty,
+            requestId: req.id,
+            actor: 'Stock Allocation Engine',
+            details: result.message,
+          }),
+        });
+      }
     } catch (err) {
       console.error('Failed to persist allocation to Neon DB:', err);
+    }
+  };
+
+  // 3. Dispatch Relief Package to Field
+  const handleDispatch = async (id: string) => {
+    const req = requests.find((r) => r.id === id);
+    if (!req) return;
+
+    const updatedRequest: ReliefRequest = { ...req, requestStatus: 'dispatched' };
+    setRequests((prev) => prev.map((r) => (r.id === id ? updatedRequest : r)));
+    if (selectedRequest && selectedRequest.id === id) {
+      setSelectedRequest(updatedRequest);
+    }
+
+    const log: AuditLogEntry = {
+      id: `AUD-${Math.floor(800 + Math.random() * 200)}`,
+      timestamp: new Date().toLocaleTimeString() + ' UTC',
+      category: 'ALLOCATION',
+      action: 'RELIEF_DISPATCHED',
+      actor: 'Chief Coordinator Vance',
+      details: `Dispatched ${req.allocatedQty} units of ${req.resourceType.replace('_', ' ')} for ${req.requesterName} from ${req.allocatedDepotId || 'Depot'}.`,
+      delta: `Dispatched ${req.id}`,
+    };
+    setAuditLogs((prev) => [log, ...prev]);
+    showToast(`🚚 Relief package for ${id} dispatched into field corridor!`);
+
+    // Cross-tab broadcast
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const ch = new BroadcastChannel('resqgrid_realtime');
+        ch.postMessage({ type: 'REQUEST_UPDATED', data: updatedRequest });
+        ch.close();
+      } catch {}
+    }
+
+    try {
+      await fetch('/api/requests', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, requestStatus: 'dispatched' }),
+      });
+    } catch (err) {
+      console.error('Failed to persist dispatch to Neon DB:', err);
+    }
+  };
+
+  // 4. Confirm Citizen Field Delivery & Fulfill Demand
+  const handleDeliver = async (id: string) => {
+    const req = requests.find((r) => r.id === id);
+    if (!req) return;
+
+    const updatedRequest: ReliefRequest = { ...req, requestStatus: 'delivered' };
+    setRequests((prev) => prev.map((r) => (r.id === id ? updatedRequest : r)));
+    if (selectedRequest && selectedRequest.id === id) {
+      setSelectedRequest(updatedRequest);
+    }
+
+    // Deduct reserved stock in frontend state
+    if (req.allocatedDepotId) {
+      setDepots((prev) =>
+        prev.map((d) => {
+          if (d.id === req.allocatedDepotId) {
+            const currentItem = d.inventory[req.resourceType];
+            return {
+              ...d,
+              inventory: {
+                ...d.inventory,
+                [req.resourceType]: {
+                  ...currentItem,
+                  allocatedStock: Math.max(0, currentItem.allocatedStock - req.allocatedQty),
+                },
+              },
+            };
+          }
+          return d;
+        })
+      );
+    }
+
+    const log: AuditLogEntry = {
+      id: `AUD-${Math.floor(800 + Math.random() * 200)}`,
+      timestamp: new Date().toLocaleTimeString() + ' UTC',
+      category: 'ALLOCATION',
+      action: 'DELIVERY_FULFILLED',
+      actor: 'Field Operations Crew',
+      details: `Confirmed delivery of ${req.allocatedQty} units of ${req.resourceType.replace('_', ' ')} to ${req.requesterName}. Demand 100% fulfilled.`,
+      delta: `Delivered ${req.id}`,
+    };
+    setAuditLogs((prev) => [log, ...prev]);
+    showToast(`✓ Demand ${id} successfully delivered & 100% fulfilled in field!`);
+
+    // Cross-tab broadcast
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const ch = new BroadcastChannel('resqgrid_realtime');
+        ch.postMessage({ type: 'REQUEST_UPDATED', data: updatedRequest });
+        ch.close();
+      } catch {}
+    }
+
+    try {
+      await fetch('/api/requests', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, requestStatus: 'delivered' }),
+      });
+
+      if (req.allocatedDepotId) {
+        await fetch('/api/depots', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'deliver',
+            depotId: req.allocatedDepotId,
+            resourceType: req.resourceType,
+            quantity: req.allocatedQty,
+            requestId: req.id,
+            actor: 'Field Operations Crew',
+            details: `Delivered to citizen for ${req.id}`,
+          }),
+        });
+      }
+    } catch (err) {
+      console.error('Failed to persist delivery to Neon DB:', err);
     }
   };
 
@@ -497,6 +687,7 @@ export default function CoordinatorOperationsPage() {
                 onVerify={handleVerify}
                 onReject={handleReject}
                 onRestore={handleRestore}
+                onDispatch={handleDispatch}
               />
             ) : (
               <ScoreInspectorDrawer
@@ -508,6 +699,8 @@ export default function CoordinatorOperationsPage() {
                 onSelectRequest={(req) => setSelectedRequest(req)}
                 onVerify={handleVerify}
                 onAllocate={handleAllocate}
+                onDispatch={handleDispatch}
+                onDeliver={handleDeliver}
                 onOverrideScore={handleOverrideScore}
                 onReject={handleReject}
                 onRestore={handleRestore}

@@ -51,6 +51,7 @@ export default function InteractiveDisasterMap({
   const requestsGroupRef = useRef<any>(null);
   const hazardLayersGroupRef = useRef<any>(null);
   const depotRadiiGroupRef = useRef<any>(null);
+  const depotsGroupRef = useRef<any>(null);
 
   const [showHazardZone, setShowHazardZone] = useState(true);
   const [showDepotRadii, setShowDepotRadii] = useState(true);
@@ -94,6 +95,9 @@ export default function InteractiveDisasterMap({
 
       const depotRadiiGroup = L.layerGroup().addTo(map);
       depotRadiiGroupRef.current = depotRadiiGroup;
+
+      const depotsGroup = L.layerGroup().addTo(map);
+      depotsGroupRef.current = depotsGroup;
 
       const requestsGroup = L.layerGroup().addTo(map);
       requestsGroupRef.current = requestsGroup;
@@ -157,96 +161,6 @@ export default function InteractiveDisasterMap({
       });
       L.marker([19.0780, 72.8830], { icon: hazardLabelIcon, interactive: false }).addTo(hazardGroup);
 
-      // 2. Add Depots & Coverage Radii
-      depots.forEach((depot) => {
-        // Depot Service Radius Ring
-        const serviceRadius = depot.id === 'DEPOT-ALPHA' ? 1400 : 1600;
-        L.circle([depot.lat, depot.lng], {
-          radius: serviceRadius,
-          color: '#38bdf8',
-          weight: 1.2,
-          dashArray: '3, 6',
-          fillColor: '#0284c7',
-          fillOpacity: 0.04,
-        }).addTo(depotRadiiGroup);
-
-        const shortName = depot.id === 'DEPOT-ALPHA' ? 'Alpha Hub' : 'Beta Hub';
-        const waterStock = depot.inventory.drinking_water.availableStock;
-        const stockBadgeColor = waterStock < 100 ? '#e11d48' : '#059669';
-
-        const depotIcon = L.divIcon({
-          className: 'custom-depot-pin',
-          html: `
-            <div style="display: flex; flex-direction: column; align-items: center; cursor: pointer;">
-              <!-- Tactical Pill Header -->
-              <div style="
-                background: #0f172a;
-                color: #ffffff;
-                border: 1.5px solid #38bdf8;
-                border-radius: 6px;
-                padding: 3px 8px;
-                font-size: 10px;
-                font-weight: 700;
-                display: flex;
-                align-items: center;
-                gap: 5px;
-                box-shadow: 0 4px 12px rgba(15, 23, 42, 0.35);
-                white-space: nowrap;
-              ">
-                <span style="font-size: 11px;">🏢</span>
-                <span>${shortName}</span>
-                <span style="
-                  background: ${stockBadgeColor};
-                  color: #ffffff;
-                  padding: 1px 5px;
-                  border-radius: 4px;
-                  font-size: 9.5px;
-                  font-weight: 800;
-                ">${waterStock}L</span>
-              </div>
-              <!-- Pin Pointer Needle -->
-              <div style="
-                width: 0;
-                height: 0;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 6px solid #0f172a;
-                margin-top: -1px;
-              "></div>
-              <!-- Ground Dot -->
-              <div style="
-                width: 6px;
-                height: 6px;
-                border-radius: 50%;
-                background: #38bdf8;
-                box-shadow: 0 0 6px #38bdf8;
-                margin-top: -1px;
-              "></div>
-            </div>
-          `,
-          iconSize: [110, 36],
-          iconAnchor: [55, 34],
-        });
-
-        const marker = L.marker([depot.lat, depot.lng], { icon: depotIcon }).addTo(map);
-        marker.bindPopup(`
-          <div style="font-size: 12px; font-family: sans-serif; min-width: 180px; padding: 2px;">
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
-              <span style="font-weight: 800; color: #0f172a; font-size: 13px;">${depot.name}</span>
-            </div>
-            <div style="color: #64748b; font-size: 11px; margin-bottom: 8px;">
-              Zone: <strong style="color: #0f172a;">${depot.zoneName}</strong>
-            </div>
-            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 8px; font-size: 11px; line-height: 1.5;">
-              <div>💧 Drinking Water: <strong style="color: ${waterStock < 100 ? '#e11d48' : '#0f172a'};">${waterStock} / ${depot.inventory.drinking_water.totalCapacity} L</strong></div>
-              <div>🍞 Food Rations: <strong>${depot.inventory.food_rations.availableStock} Packs</strong></div>
-              <div>🩹 Medical Kits: <strong>${depot.inventory.medical_supplies.availableStock} Kits</strong></div>
-              <div>⛺ Shelter Kits: <strong>${depot.inventory.shelter_kits.availableStock} Tents</strong></div>
-            </div>
-          </div>
-        `);
-      });
-
       // Fit bounds initially to Mumbai disaster operational theater
       const bounds = L.latLngBounds([
         ...FLOOD_INUNDATION_ZONE,
@@ -263,6 +177,117 @@ export default function InteractiveDisasterMap({
       }
     };
   }, []);
+
+  // 1. Dynamically Update Depot Markers & Stock Levels on Real-Time State Changes
+  useEffect(() => {
+    const L = leafletModuleRef.current;
+    const map = mapInstanceRef.current;
+    const depotsGroup = depotsGroupRef.current;
+    const depotRadiiGroup = depotRadiiGroupRef.current;
+    if (!L || !map || !depotsGroup || !depotRadiiGroup) return;
+
+    depotsGroup.clearLayers();
+    depotRadiiGroup.clearLayers();
+
+    depots.forEach((depot) => {
+      if (showDepotRadii) {
+        const serviceRadius = depot.id === 'DEPOT-ALPHA' ? 1400 : 1600;
+        L.circle([depot.lat, depot.lng], {
+          radius: serviceRadius,
+          color: '#38bdf8',
+          weight: 1.2,
+          dashArray: '3, 6',
+          fillColor: '#0284c7',
+          fillOpacity: 0.04,
+        }).addTo(depotRadiiGroup);
+      }
+
+      const shortName =
+        depot.id === 'DEPOT-ALPHA' ? 'Alpha Hub' : depot.id === 'DEPOT-BETA' ? 'Beta Hub' : 'Gamma Hub';
+      const waterStock = depot.inventory?.drinking_water?.availableStock ?? 0;
+      const stockBadgeColor = waterStock < 100 ? '#e11d48' : '#059669';
+
+      const depotIcon = L.divIcon({
+        className: 'custom-depot-pin',
+        html: `
+          <div style="display: flex; flex-direction: column; align-items: center; cursor: pointer;">
+            <!-- Tactical Pill Header -->
+            <div style="
+              background: #0f172a;
+              color: #ffffff;
+              border: 1.5px solid #38bdf8;
+              border-radius: 6px;
+              padding: 3px 8px;
+              font-size: 10px;
+              font-weight: 700;
+              display: flex;
+              align-items: center;
+              gap: 5px;
+              box-shadow: 0 4px 12px rgba(15, 23, 42, 0.35);
+              white-space: nowrap;
+            ">
+              <span style="font-size: 11px;">🏢</span>
+              <span>${shortName}</span>
+              <span style="
+                background: ${stockBadgeColor};
+                color: #ffffff;
+                padding: 1px 5px;
+                border-radius: 4px;
+                font-size: 9.5px;
+                font-weight: 800;
+              ">${waterStock}L</span>
+            </div>
+            <!-- Pin Pointer Needle -->
+            <div style="
+              width: 0;
+              height: 0;
+              border-left: 5px solid transparent;
+              border-right: 5px solid transparent;
+              border-top: 6px solid #0f172a;
+              margin-top: -1px;
+            "></div>
+            <!-- Ground Dot -->
+            <div style="
+              width: 6px;
+              height: 6px;
+              border-radius: 50%;
+              background: #38bdf8;
+              box-shadow: 0 0 6px #38bdf8;
+              margin-top: -1px;
+            "></div>
+          </div>
+        `,
+        iconSize: [110, 36],
+        iconAnchor: [55, 34],
+      });
+
+      const marker = L.marker([depot.lat, depot.lng], { icon: depotIcon }).addTo(depotsGroup);
+      marker.bindPopup(`
+        <div style="font-size: 12px; font-family: sans-serif; min-width: 180px; padding: 2px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+            <span style="font-weight: 800; color: #0f172a; font-size: 13px;">${depot.name}</span>
+          </div>
+          <div style="color: #64748b; font-size: 11px; margin-bottom: 8px;">
+            Zone: <strong style="color: #0f172a;">${depot.zoneName}</strong>
+          </div>
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 8px; font-size: 11px; line-height: 1.5;">
+            <div>💧 Drinking Water: <strong style="color: ${
+              waterStock < 100 ? '#e11d48' : '#0f172a'
+            };">${waterStock} / ${depot.inventory?.drinking_water?.totalCapacity || 1000} L</strong></div>
+            <div>🍞 Food Rations: <strong>${
+              depot.inventory?.food_rations?.availableStock || 0
+            } Packs</strong></div>
+            <div>🩹 Medical Kits: <strong>${
+              depot.inventory?.medical_supplies?.availableStock || 0
+            } Kits</strong></div>
+            <div>⛺ Shelter Kits: <strong>${
+              depot.inventory?.shelter_kits?.availableStock || 0
+            } Tents</strong></div>
+          </div>
+        </div>
+      `);
+    });
+  }, [depots, showDepotRadii]);
 
   // 2. Dynamically Update Request Markers on Real-Time State Changes (Without Recreating Map)
   useEffect(() => {

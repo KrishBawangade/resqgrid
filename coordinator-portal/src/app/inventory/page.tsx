@@ -1,11 +1,18 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import Link from 'next/link';
 import { 
   INITIAL_DEPOTS, 
-  INITIAL_REPLENISHMENT 
+  INITIAL_REPLENISHMENT, 
+  INITIAL_REQUESTS 
 } from '@/lib/data/initialScenario';
-import { ReliefDepot, ReplenishmentOrder, ResourceType } from '@/lib/types';
+import { 
+  ReliefDepot, 
+  ReplenishmentOrder, 
+  ResourceType, 
+  ReliefRequest 
+} from '@/lib/types';
 import { 
   Boxes, 
   Plus, 
@@ -13,19 +20,74 @@ import {
   Truck, 
   CheckCircle2, 
   X, 
-  ArrowRight,
   Droplets,
   HeartPulse,
   Utensils,
   Tent,
-  Check
+  Check,
+  RefreshCw,
+  ShieldCheck,
+  PackageCheck,
+  Clock,
+  Sparkles,
+  Layers
 } from 'lucide-react';
+
+export const MIN_SAFETY_BUFFER: Record<ResourceType, number> = {
+  drinking_water: 150,
+  food_rations: 100,
+  medical_supplies: 25,
+  shelter_kits: 15,
+};
+
+const RESOURCE_DEFS = [
+  { key: 'drinking_water' as const, label: 'Water', unit: 'Liters', icon: Droplets, color: 'text-blue-600' },
+  { key: 'food_rations' as const, label: 'Rations', unit: 'Packs', icon: Utensils, color: 'text-amber-600' },
+  { key: 'medical_supplies' as const, label: 'Medical', unit: 'Kits', icon: HeartPulse, color: 'text-rose-600' },
+  { key: 'shelter_kits' as const, label: 'Shelter', unit: 'Tents', icon: Tent, color: 'text-purple-600' },
+];
+
+function playSuccessChime() {
+  try {
+    const AudioContextClass =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof window.AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(523.25, ctx.currentTime); // C5
+    osc.frequency.setValueAtTime(659.25, ctx.currentTime + 0.1); // E5
+    osc.frequency.setValueAtTime(783.99, ctx.currentTime + 0.2); // G5
+    osc.frequency.setValueAtTime(1046.5, ctx.currentTime + 0.3); // C6
+
+    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.55);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start();
+    osc.stop(ctx.currentTime + 0.55);
+  } catch {
+    // Silently ignore if blocked
+  }
+}
 
 export default function CoordinatorInventoryPage() {
   const [depots, setDepots] = useState<ReliefDepot[]>(INITIAL_DEPOTS);
   const [replenishments, setReplenishments] = useState<ReplenishmentOrder[]>(INITIAL_REPLENISHMENT);
-  const [showOrderModal, setShowOrderModal] = useState(false);
+  const [requests, setRequests] = useState<ReliefRequest[]>(INITIAL_REQUESTS);
+  const [showOrderDrawer, setShowOrderDrawer] = useState(false);
+  const showOrderModal = showOrderDrawer;
+  const setShowOrderModal = setShowOrderDrawer;
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isLiveActive, setIsLiveActive] = useState(true);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [processingOrderId, setProcessingOrderId] = useState<string | null>(null);
 
   // Form states
   const [selectedResource, setSelectedResource] = useState<ResourceType>('drinking_water');
@@ -33,64 +95,275 @@ export default function CoordinatorInventoryPage() {
   const [selectedDepotId, setSelectedDepotId] = useState('DEPOT-ALPHA');
   const [selectedSupplier, setSelectedSupplier] = useState('National Disaster Reserve Hub');
   const [orderPriority, setOrderPriority] = useState<'emergency' | 'high' | 'standard'>('emergency');
+  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+
+  const handleOpenRestock = (depotId: string, resourceKey: ResourceType) => {
+    setSelectedDepotId(depotId);
+    setSelectedResource(resourceKey);
+
+    const defaultQtys: Record<ResourceType, string> = {
+      drinking_water: '500',
+      food_rations: '300',
+      medical_supplies: '100',
+      shelter_kits: '50',
+    };
+    setOrderQty(defaultQtys[resourceKey] || '200');
+    setShowOrderDrawer(true);
+  };
+
+  const currentTargetDepot = depots.find((d) => d.id === selectedDepotId);
+  const currentTargetStock = currentTargetDepot?.inventory[selectedResource];
+  const currentTargetBuffer = MIN_SAFETY_BUFFER[selectedResource];
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 4000);
+    setTimeout(() => setToastMessage(null), 4500);
   };
 
-  const handleCreateOrder = (e: React.FormEvent) => {
+  // 1. Initial Load from Neon PostgreSQL APIs
+  const loadInventoryData = useCallback(async (isManual = false) => {
+    if (isManual) setIsSyncing(true);
+    try {
+      const [depotsRes, repRes, reqRes] = await Promise.all([
+        fetch('/api/depots', { cache: 'no-store' }),
+        fetch('/api/replenishment', { cache: 'no-store' }),
+        fetch('/api/requests', { cache: 'no-store' }),
+      ]);
+
+      if (depotsRes.ok) {
+        const depotsData = await depotsRes.json();
+        if (Array.isArray(depotsData) && depotsData.length > 0) {
+          setDepots(depotsData);
+        }
+      }
+
+      if (repRes.ok) {
+        const repData = await repRes.json();
+        if (Array.isArray(repData)) {
+          setReplenishments(repData);
+        }
+      }
+
+      if (reqRes.ok) {
+        const reqData = await reqRes.json();
+        if (Array.isArray(reqData)) {
+          setRequests(reqData);
+        }
+      }
+
+      setIsLiveActive(true);
+      setLastSyncTime(new Date());
+    } catch (err) {
+      console.warn('Failed to load inventory data:', err);
+    } finally {
+      if (isManual) setIsSyncing(false);
+    }
+  }, []);
+
+  // 2. Establish Real-Time SSE Stream & BroadcastChannel
+  useEffect(() => {
+    loadInventoryData();
+
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource('/api/requests/stream');
+
+      eventSource.onopen = () => {
+        setIsLiveActive(true);
+        setLastSyncTime(new Date());
+      };
+
+      eventSource.onmessage = (event) => {
+        setLastSyncTime(new Date());
+        if (!event.data) return;
+
+        try {
+          const payload = JSON.parse(event.data);
+
+          if (payload.type === 'DEPOTS_UPDATED' && payload.data) {
+            const updated = payload.data as ReliefDepot[];
+            if (Array.isArray(updated)) {
+              setDepots(updated);
+              showToast('📦 Real-time inventory sync: Depot stock updated.');
+            }
+          } else if (payload.type === 'REPLENISHMENT_UPDATED' && payload.data) {
+            const updated = payload.data as ReplenishmentOrder[];
+            if (Array.isArray(updated)) {
+              setReplenishments(updated);
+            }
+          } else if (payload.type === 'REQUEST_UPDATED' && payload.data) {
+            const updatedReq = payload.data as ReliefRequest;
+            setRequests((prev) =>
+              prev.map((r) => (r.id === updatedReq.id ? { ...r, ...updatedReq } : r))
+            );
+          } else if (payload.type === 'NEW_REQUEST' && payload.data) {
+            const newReq = payload.data as ReliefRequest;
+            setRequests((prev) => [newReq, ...prev]);
+          }
+        } catch {
+          // Keepalive ping
+        }
+      };
+
+      eventSource.onerror = () => {
+        setIsLiveActive(false);
+      };
+    } catch (err) {
+      console.warn('SSE stream error in inventory:', err);
+    }
+
+    // Cross-tab broadcast channel for local instant reflection
+    let channel: BroadcastChannel | null = null;
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        channel = new BroadcastChannel('resqgrid_realtime');
+        channel.onmessage = (event) => {
+          if (event.data?.type === 'DEPOTS_UPDATED' && event.data?.data) {
+            setDepots(event.data.data as ReliefDepot[]);
+          } else if (event.data?.type === 'REPLENISHMENT_UPDATED' && event.data?.data) {
+            setReplenishments(event.data.data as ReplenishmentOrder[]);
+          } else if (event.data?.type === 'REQUEST_UPDATED' && event.data?.data) {
+            const updatedReq = event.data.data as ReliefRequest;
+            setRequests((prev) =>
+              prev.map((r) => (r.id === updatedReq.id ? { ...r, ...updatedReq } : r))
+            );
+          }
+        };
+      } catch (err) {
+        console.warn('BroadcastChannel error:', err);
+      }
+    }
+
+    return () => {
+      if (eventSource) eventSource.close();
+      if (channel) channel.close();
+    };
+  }, [loadInventoryData]);
+
+  // 3. Issue New Replenishment Order
+  const handleCreateOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingOrder) return;
+    setIsSubmittingOrder(true);
+
     const depot = depots.find((d) => d.id === selectedDepotId);
-    const newOrder: ReplenishmentOrder = {
-      id: `REP-${Math.floor(510 + Math.random() * 400)}`,
+    const parsedQty = parseInt(orderQty, 10);
+
+    const payload = {
       resourceType: selectedResource,
-      quantity: parseInt(orderQty, 10),
+      quantity: parsedQty,
       depotId: selectedDepotId,
-      depotName: depot?.name || 'Central Depot',
+      depotName: depot?.name || `${selectedDepotId} Hub`,
       supplierName: selectedSupplier,
       priority: orderPriority,
-      status: 'in_transit', // simulated immediate supplier acceptance and dispatch
-      requestedAt: new Date().toISOString(),
-      dispatchedAt: new Date().toISOString(),
     };
 
-    setReplenishments([newOrder, ...replenishments]);
-    setShowOrderModal(false);
-    showToast(`✓ Order ${newOrder.id} dispatched! Status: In Transit from ${selectedSupplier}.`);
+    try {
+      const res = await fetch('/api/replenishment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) throw new Error('Order creation failed');
+      const newOrder: ReplenishmentOrder = await res.json();
+
+      setReplenishments((prev) => [newOrder, ...prev.filter((o) => o.id !== newOrder.id)]);
+      setShowOrderDrawer(false);
+      showToast(`✓ Order ${newOrder.id} dispatched! Status: In Transit from ${selectedSupplier}.`);
+
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        try {
+          const ch = new BroadcastChannel('resqgrid_realtime');
+          ch.postMessage({ type: 'REPLENISHMENT_UPDATED', data: [newOrder, ...replenishments] });
+          ch.close();
+        } catch {}
+      }
+    } catch (err) {
+      console.error('Failed to issue replenishment order:', err);
+      showToast('⚠️ Could not connect to order dispatch server.');
+    } finally {
+      setIsSubmittingOrder(false);
+    }
   };
 
-  const handleConfirmDelivery = (orderId: string) => {
+  // 4. Confirm Delivery Receipt & Auto-Restock Depot Inventory
+  const handleConfirmDelivery = async (orderId: string) => {
     const order = replenishments.find((r) => r.id === orderId);
-    if (!order) return;
+    if (!order || processingOrderId === orderId) return;
 
-    // Strict Rule: Stock ONLY increases when coordinator confirms receipt
-    setDepots((prev) =>
-      prev.map((d) => {
-        if (d.id === order.depotId) {
-          const currentItem = d.inventory[order.resourceType];
-          return {
-            ...d,
-            inventory: {
-              ...d.inventory,
-              [order.resourceType]: {
-                ...currentItem,
-                availableStock: currentItem.availableStock + order.quantity,
-              },
-            },
-          };
-        }
-        return d;
-      })
-    );
+    setProcessingOrderId(orderId);
 
-    setReplenishments((prev) =>
-      prev.map((o) => (o.id === orderId ? { ...o, status: 'delivered', deliveredAt: new Date().toISOString() } : o))
-    );
+    try {
+      const res = await fetch('/api/replenishment', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: orderId, action: 'confirm_delivery' }),
+      });
 
-    showToast(`✓ Confirmed receipt of ${order.quantity} units for ${order.depotName}! Available stock updated.`);
+      if (!res.ok) throw new Error('Delivery confirmation failed');
+      const data = await res.json();
+
+      if (data.depots) {
+        setDepots(data.depots);
+      } else {
+        // Fallback optimistic update
+        setDepots((prev) =>
+          prev.map((d) => {
+            if (d.id === order.depotId) {
+              const currentItem = d.inventory[order.resourceType];
+              return {
+                ...d,
+                inventory: {
+                  ...d.inventory,
+                  [order.resourceType]: {
+                    ...currentItem,
+                    availableStock: currentItem.availableStock + order.quantity,
+                    totalCapacity: Math.max(currentItem.totalCapacity, currentItem.availableStock + order.quantity),
+                  },
+                },
+              };
+            }
+            return d;
+          })
+        );
+      }
+
+      if (data.orders) {
+        setReplenishments(data.orders);
+      } else {
+        setReplenishments((prev) =>
+          prev.map((o) =>
+            o.id === orderId ? { ...o, status: 'delivered', deliveredAt: new Date().toISOString() } : o
+          )
+        );
+      }
+
+      playSuccessChime();
+      showToast(
+        `✓ Confirmed receipt of ${order.quantity} units for ${order.depotName}! Available stock updated in Neon DB.`
+      );
+
+      // Broadcast update across all tabs
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        try {
+          const ch = new BroadcastChannel('resqgrid_realtime');
+          if (data.depots) ch.postMessage({ type: 'DEPOTS_UPDATED', data: data.depots });
+          if (data.orders) ch.postMessage({ type: 'REPLENISHMENT_UPDATED', data: data.orders });
+          ch.close();
+        } catch {}
+      }
+    } catch (err) {
+      console.error('Failed to confirm delivery:', err);
+      showToast('⚠️ Could not confirm delivery with database.');
+    } finally {
+      setProcessingOrderId(null);
+    }
   };
 
+
+
+  // Helper icons
   const getResourceIcon = (type: ResourceType) => {
     switch (type) {
       case 'drinking_water':
@@ -104,12 +377,123 @@ export default function CoordinatorInventoryPage() {
     }
   };
 
+  // Active requests needing fulfillment
+  const activeRequests = requests.filter(
+    (r) => r.requestStatus !== 'rejected' && r.requestStatus !== 'delivered'
+  );
+
+  // TRUE DEMAND DEFICIT CALCULATION:
+  // "Low stock" (stock < safety buffer) is indicated by badges on the depot cards.
+  // "Deficit" strictly means active citizen queue demand exceeds available stock (Demand > Available Stock).
+  // Once a restock order has been placed (status === 'in_transit'), the deficit is being addressed and the banner is removed!
+  const activeDeficits = RESOURCE_DEFS.map((def) => {
+    // 1. Total unfulfilled citizen demand for this resource across active requests
+    const unfulfilledDemand = activeRequests
+      .filter((r) => r.resourceType === def.key)
+      .reduce((sum, r) => sum + r.unfulfilledQty, 0);
+
+    // 2. Total available stock across all staging depots
+    const totalAvailable = depots.reduce(
+      (sum, d) => sum + (d.inventory[def.key]?.availableStock ?? 0),
+      0
+    );
+
+    // Check localized assigned demand exceeding depot available stock
+    const depotWithLocalizedDeficit = depots.find((d) => {
+      const depotAvailable = d.inventory[def.key]?.availableStock ?? 0;
+      const depotUnfulfilled = activeRequests
+        .filter((r) => r.resourceType === def.key && r.allocatedDepotId === d.id)
+        .reduce((sum, r) => sum + r.unfulfilledQty, 0);
+      return depotUnfulfilled > depotAvailable;
+    });
+
+    const isSystemDeficit = unfulfilledDemand > totalAvailable;
+    const isLocalizedDeficit = !!depotWithLocalizedDeficit;
+
+    // If demand does not exceed available stock, there is NO deficit (no banner!)
+    if (!isSystemDeficit && !isLocalizedDeficit) return null;
+
+    // Has a restock order already been placed for this resource?
+    const hasActiveRestock = replenishments.some(
+      (r) => r.resourceType === def.key && r.status === 'in_transit'
+    );
+
+    // Once restock request is made, remove the banner!
+    if (hasActiveRestock) return null;
+
+    const targetDepot = depotWithLocalizedDeficit || depots[0];
+    const targetDepotStock = targetDepot?.inventory[def.key]?.availableStock ?? 0;
+    const targetDepotDemand = activeRequests
+      .filter((r) => r.resourceType === def.key && (r.allocatedDepotId === targetDepot.id || !r.allocatedDepotId))
+      .reduce((sum, r) => sum + r.unfulfilledQty, 0);
+
+    const deficitQty = isSystemDeficit
+      ? unfulfilledDemand - totalAvailable
+      : Math.max(1, targetDepotDemand - targetDepotStock);
+
+    return {
+      id: `deficit-${def.key}`,
+      resourceType: def.key,
+      label: def.label,
+      unit: def.unit,
+      targetDepotId: targetDepot.id,
+      targetDepotName: targetDepot.name,
+      availableStock: isSystemDeficit ? totalAvailable : targetDepotStock,
+      unfulfilledDemand,
+      deficit: deficitQty,
+      icon: def.icon,
+      color: def.color,
+      isSystemDeficit,
+    };
+  }).filter(Boolean) as {
+    id: string;
+    resourceType: ResourceType;
+    label: string;
+    unit: string;
+    targetDepotId: string;
+    targetDepotName: string;
+    availableStock: number;
+    unfulfilledDemand: number;
+    deficit: number;
+    icon: any;
+    color: string;
+    isSystemDeficit: boolean;
+  }[];
+
+  // System-wide combined inventory aggregates across all active depots
+  const combinedInventory = RESOURCE_DEFS.map((def) => {
+    const totalAvailable = depots.reduce(
+      (sum, d) => sum + (d.inventory[def.key]?.availableStock ?? 0),
+      0
+    );
+    const totalAllocated = depots.reduce(
+      (sum, d) => sum + (d.inventory[def.key]?.allocatedStock ?? 0),
+      0
+    );
+    const inTransitQty = replenishments
+      .filter((r) => r.resourceType === def.key && r.status === 'in_transit')
+      .reduce((sum, r) => sum + r.quantity, 0);
+
+    const minSystemBuffer = MIN_SAFETY_BUFFER[def.key] * depots.length;
+    const isSystemLow = totalAvailable < minSystemBuffer;
+
+    return {
+      ...def,
+      totalAvailable,
+      totalAllocated,
+      inTransitQty,
+      minSystemBuffer,
+      isSystemLow,
+    };
+  });
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-12">
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-xl shadow-xl text-xs font-semibold border border-slate-700 animate-bounce">
-          {toastMessage}
+        <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-xl shadow-xl text-xs font-semibold border border-slate-700 animate-bounce flex items-center space-x-2">
+          <Sparkles className="w-4 h-4 text-amber-400" />
+          <span>{toastMessage}</span>
         </div>
       )}
 
@@ -119,132 +503,278 @@ export default function CoordinatorInventoryPage() {
           <h1 className="text-xl font-extrabold text-slate-900 tracking-tight flex items-center space-x-2">
             <span>Depot Inventory & Replenishment Logistics</span>
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-mono font-bold border border-blue-200">
-              Stock-Aware Control
+              Live Neon Sync
             </span>
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Real-time warehouse inventories, deficit monitoring, and verified supplier shipment receipts.
+            Real-time warehouse inventories, automated demand deduction, and verified supplier shipment receipts.
           </p>
         </div>
 
-        <button
-          onClick={() => setShowOrderModal(true)}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm hover:shadow flex items-center space-x-1.5 self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Issue Replenishment Order</span>
-        </button>
+        <div className="flex items-center space-x-2.5 self-start sm:self-auto">
+          <button
+            onClick={() => loadInventoryData(true)}
+            disabled={isSyncing}
+            className="px-3 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold transition-all shadow-2xs flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+            title="Reload from Neon PostgreSQL"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${isSyncing ? 'animate-spin text-blue-600' : ''}`} />
+            <span>{isSyncing ? 'Syncing...' : 'Sync Now'}</span>
+          </button>
+
+          <button
+            onClick={() => setShowOrderDrawer(true)}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm hover:shadow flex items-center space-x-1.5 cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Issue Replenishment Order</span>
+          </button>
+        </div>
       </div>
 
-      {/* Shortage Warning Advisory */}
-      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
-        <div className="flex items-start space-x-3">
-          <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold">
-            <AlertTriangle className="w-4 h-4" />
-          </div>
-          <div>
-            <h2 className="text-xs font-bold text-amber-900">
-              Active Regional Shortage: Drinking Water at Depot Alpha
+      {/* Live Stream Connectivity Indicator */}
+      <div className="flex items-center justify-between px-1 text-[11px] text-slate-500 font-mono">
+        <div className="flex items-center space-x-2">
+          <span className="flex h-2 w-2 relative">
+            <span className={`inline-flex rounded-full h-2 w-2 ${isLiveActive ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
+          </span>
+          <span>{isLiveActive ? 'Real-Time Inventory Stream Active (SSE & BroadcastChannel)' : 'Reconnecting...'}</span>
+        </div>
+        <span>Last synced: {lastSyncTime ? lastSyncTime.toLocaleTimeString() : 'Connecting...'}</span>
+      </div>
+
+      {/* Active Demand Deficit Banners (ONLY shown when citizen demand in active queue exceeds available stock AND no restock order placed yet) */}
+      {activeDeficits.length > 0 && (
+        <div className="space-y-2.5">
+          {activeDeficits.map((deficit) => {
+            const Icon = deficit.icon;
+            return (
+              <div
+                key={deficit.id}
+                className="bg-amber-50 border border-amber-300 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs animate-in fade-in duration-200"
+              >
+                <div className="flex items-start space-x-3">
+                  <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold flex-shrink-0 mt-0.5 sm:mt-0">
+                    <AlertTriangle className="w-4 h-4 text-amber-600" />
+                  </div>
+                  <div>
+                    <div className="flex items-center space-x-2">
+                      <h2 className="text-xs font-bold text-amber-950 flex items-center space-x-1.5">
+                        <Icon className={`w-3.5 h-3.5 ${deficit.color}`} />
+                        <span>Critical Demand Deficit: {deficit.label}</span>
+                      </h2>
+                      <span className="text-[10px] font-mono font-bold bg-amber-200/80 text-amber-900 px-1.5 py-0.2 rounded border border-amber-300">
+                        -{deficit.deficit} {deficit.unit} Unmet Demand
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-amber-800 mt-0.5">
+                      Citizen Queue Demand: <strong className="font-mono text-amber-950">{deficit.unfulfilledDemand} {deficit.unit}</strong> • Available Stock: <strong className="font-mono text-amber-950">{deficit.availableStock} {deficit.unit}</strong> • Target Hub: <span className="font-medium text-amber-950">{deficit.targetDepotName}</span>
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => handleOpenRestock(deficit.targetDepotId, deficit.resourceType)}
+                  className="text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 px-4 py-2 rounded-xl transition-all shadow-xs hover:shadow flex items-center space-x-1.5 cursor-pointer whitespace-nowrap self-stretch sm:self-auto justify-center"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Restock {deficit.label} &rarr;</span>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* System-Wide Combined Inventory */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between px-1">
+          <div className="flex items-center space-x-2">
+            <Layers className="w-4 h-4 text-blue-600" />
+            <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+              Total Combined Regional Stock ({depots.length} Active Depots)
             </h2>
-            <p className="text-[11px] text-amber-800 mt-0.5">
-              Available: <strong className="font-mono text-amber-950">80 Liters</strong> • Unfulfilled Queue: <strong className="font-mono text-rose-800">120 Liters</strong> • Net Deficit: <strong className="font-mono text-rose-800">-40 Liters</strong>
-            </p>
           </div>
+          <span className="text-[11px] text-slate-500 font-medium">
+            Aggregated Across All Staging Hubs
+          </span>
         </div>
 
-        <span className="text-[11px] font-bold text-amber-900 bg-amber-100 px-3 py-1 rounded-lg border border-amber-300">
-          Shipment REP-501 (500 L) In Transit
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+          {combinedInventory.map((item) => {
+            const Icon = item.icon;
+            return (
+              <div
+                key={item.key}
+                className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <div className="w-7 h-7 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center">
+                        <Icon className={`w-3.5 h-3.5 ${item.color}`} />
+                      </div>
+                      <span className="text-xs font-bold text-slate-800">{item.label}</span>
+                    </div>
+                    <span
+                      className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase border ${
+                        item.isSystemLow
+                          ? 'bg-amber-50 text-amber-800 border-amber-200'
+                          : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      }`}
+                    >
+                      {item.isSystemLow ? 'Buffer Low' : 'Adequate'}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 flex items-baseline">
+                    <span className="text-2xl font-black text-slate-900 tracking-tight font-mono">
+                      {item.totalAvailable.toLocaleString()}
+                    </span>
+                    <span className="text-slate-500 font-medium text-xs ml-1.5">{item.unit}</span>
+                  </div>
+                </div>
+
+                <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[10.5px]">
+                  <div className="text-slate-500 font-mono text-[10px]">
+                    {item.totalAllocated > 0 ? (
+                      <span className="text-blue-600 font-semibold">
+                        {item.totalAllocated.toLocaleString()} {item.unit} reserved
+                      </span>
+                    ) : (
+                      <span>0 reserved</span>
+                    )}
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    {item.inTransitQty > 0 && (
+                      <span className="text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-mono text-[9.5px] font-bold flex items-center space-x-1 animate-pulse">
+                        <Truck className="w-2.5 h-2.5 text-amber-600" />
+                        <span>+{item.inTransitQty.toLocaleString()}</span>
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const lowestDepot = [...depots].sort(
+                          (a, b) => (a.inventory[item.key]?.availableStock ?? 0) - (b.inventory[item.key]?.availableStock ?? 0)
+                        )[0];
+                        handleOpenRestock(lowestDepot ? lowestDepot.id : 'DEPOT-ALPHA', item.key);
+                      }}
+                      className="px-2 py-0.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold rounded text-[10px] border border-blue-200 flex items-center space-x-0.5 transition-colors cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>Restock</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Depots Inventory Matrix Header */}
+      <div className="flex items-center justify-between px-1 pt-1">
+        <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+          Individual Staging Depot Inventories
+        </h2>
+        <span className="text-[11px] text-slate-500">
+          Distribution across sector hubs
         </span>
       </div>
 
       {/* Depots Inventory Matrix */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {depots.map((depot) => (
-          <div key={depot.id} className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div>
-                <span className="font-mono text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                  {depot.id}
+          <div key={depot.id} className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs space-y-3 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                <div>
+                  <span className="font-mono text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                    {depot.id}
+                  </span>
+                  <h3 className="text-sm font-bold text-slate-900 mt-1 line-clamp-1">{depot.name}</h3>
+                  <span className="text-[11px] text-slate-500">{depot.zoneName}</span>
+                </div>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border flex-shrink-0 ${
+                  depot.status === 'operational'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}>
+                  {depot.status === 'operational' ? 'Operational' : 'Constrained'}
                 </span>
-                <h3 className="text-sm font-bold text-slate-900 mt-1">{depot.name}</h3>
-                <span className="text-[11px] text-slate-500">{depot.zoneName}</span>
-              </div>
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                depot.status === 'operational'
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : 'bg-amber-50 text-amber-700 border-amber-200'
-              }`}>
-                {depot.status === 'operational' ? 'Operational' : 'Constrained Access'}
-              </span>
-            </div>
-
-            {/* 4 Resources Matrix */}
-            <div className="grid grid-cols-2 gap-2.5 text-xs">
-              {/* Drinking Water */}
-              <div className={`p-3 rounded-xl border ${
-                depot.inventory.drinking_water.availableStock < 100
-                  ? 'bg-amber-50/70 border-amber-300'
-                  : 'bg-slate-50/70 border-slate-200/70'
-              }`}>
-                <div className="flex justify-between items-center">
-                  <span className="flex items-center space-x-1 font-semibold text-slate-700">
-                    <Droplets className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Drinking Water</span>
-                  </span>
-                  {depot.inventory.drinking_water.availableStock < 100 && (
-                    <span className="text-[9px] font-bold text-amber-800 bg-amber-100 px-1.5 py-0.2 rounded uppercase">
-                      Low
-                    </span>
-                  )}
-                </div>
-                <div className="mt-2 font-mono">
-                  <span className="text-xl font-extrabold text-slate-900">
-                    {depot.inventory.drinking_water.availableStock}
-                  </span>
-                  <span className="text-slate-400 text-xs"> / {depot.inventory.drinking_water.totalCapacity} L</span>
-                </div>
               </div>
 
-              {/* Food Rations */}
-              <div className="p-3 rounded-xl bg-slate-50/70 border border-slate-200/70">
-                <span className="flex items-center space-x-1 font-semibold text-slate-700">
-                  <Utensils className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Food Rations</span>
-                </span>
-                <div className="mt-2 font-mono">
-                  <span className="text-xl font-extrabold text-slate-900">
-                    {depot.inventory.food_rations.availableStock}
-                  </span>
-                  <span className="text-slate-400 text-xs"> / {depot.inventory.food_rations.totalCapacity} Packs</span>
-                </div>
-              </div>
+              {/* 4 Resources Matrix */}
+              <div className="grid grid-cols-2 gap-2.5 text-xs mt-3">
+                {RESOURCE_DEFS.map(({ key, label, unit, icon: Icon, color }) => {
+                  const stock = depot.inventory[key];
+                  const minBuffer = MIN_SAFETY_BUFFER[key];
+                  const isLow = stock.availableStock < minBuffer;
 
-              {/* Medical Supplies */}
-              <div className="p-3 rounded-xl bg-slate-50/70 border border-slate-200/70">
-                <span className="flex items-center space-x-1 font-semibold text-slate-700">
-                  <HeartPulse className="w-3.5 h-3.5 text-rose-600" />
-                  <span>Medical Supplies</span>
-                </span>
-                <div className="mt-2 font-mono">
-                  <span className="text-xl font-extrabold text-slate-900">
-                    {depot.inventory.medical_supplies.availableStock}
-                  </span>
-                  <span className="text-slate-400 text-xs"> / {depot.inventory.medical_supplies.totalCapacity} Kits</span>
-                </div>
-              </div>
+                  return (
+                    <div
+                      key={key}
+                      className={`p-3 rounded-xl border flex flex-col justify-between transition-colors ${
+                        isLow
+                          ? 'bg-amber-50/80 border-amber-300 ring-1 ring-amber-200/50'
+                          : 'bg-slate-50/70 border-slate-200/70'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex justify-between items-center">
+                          <span className="flex items-center space-x-1.5 font-semibold text-slate-700">
+                            <Icon className={`w-3.5 h-3.5 ${color}`} />
+                            <span>{label}</span>
+                          </span>
+                          {isLow ? (
+                            <span className="text-[9px] font-bold text-amber-800 bg-amber-100 px-1.5 py-0.2 rounded uppercase border border-amber-200">
+                              Low
+                            </span>
+                          ) : (
+                            <span className="text-[9px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
+                              Adequate
+                            </span>
+                          )}
+                        </div>
 
-              {/* Shelter Kits */}
-              <div className="p-3 rounded-xl bg-slate-50/70 border border-slate-200/70">
-                <span className="flex items-center space-x-1 font-semibold text-slate-700">
-                  <Tent className="w-3.5 h-3.5 text-purple-600" />
-                  <span>Shelter Kits</span>
-                </span>
-                <div className="mt-2 font-mono">
-                  <span className="text-xl font-extrabold text-slate-900">
-                    {depot.inventory.shelter_kits.availableStock}
-                  </span>
-                  <span className="text-slate-400 text-xs"> / {depot.inventory.shelter_kits.totalCapacity} Tents</span>
-                </div>
+                        <div className="mt-2 font-mono flex items-baseline">
+                          <span className="text-xl font-extrabold text-slate-900 tracking-tight">
+                            {stock.availableStock}
+                          </span>
+                          <span className="text-slate-500 font-medium text-xs ml-1.5">{unit}</span>
+                        </div>
+
+                        <div className="mt-1.5 space-y-0.5 text-[10.5px]">
+                          <div className="text-slate-500 font-mono text-[10px]">
+                            Min safety: {minBuffer} {unit}
+                          </div>
+                          {stock.allocatedStock > 0 && (
+                            <div className="text-blue-600 font-semibold font-mono text-[10px]">
+                              {stock.allocatedStock} {unit} reserved
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Restock Button that opens the drawer */}
+                      <button
+                        type="button"
+                        onClick={() => handleOpenRestock(depot.id, key)}
+                        className={`mt-2.5 w-full py-1.5 px-2 rounded-lg text-[10.5px] font-bold flex items-center justify-center space-x-1 transition-all cursor-pointer ${
+                          isLow
+                            ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-2xs hover:shadow-xs'
+                            : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 hover:border-slate-300 shadow-2xs'
+                        }`}
+                        title={`Request replenishment for ${label} at ${depot.id}`}
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Restock {label}</span>
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -266,155 +796,351 @@ export default function CoordinatorInventoryPage() {
         </div>
 
         <div className="space-y-3">
-          {replenishments.map((order) => (
-            <div
-              key={order.id}
-              className="bg-slate-50/80 border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
-            >
-              <div>
-                <div className="flex items-center space-x-2">
-                  <span className="font-mono font-bold text-blue-600 bg-white px-2 py-0.5 rounded border border-slate-200">
-                    {order.id}
-                  </span>
-                  <span className="font-bold text-slate-900 text-sm">
-                    {order.quantity} Units of {order.resourceType.replace('_', ' ')}
-                  </span>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 uppercase">
-                    {order.priority}
-                  </span>
-                </div>
-                <div className="text-[11px] text-slate-500 mt-1">
-                  Supplier: <strong className="text-slate-700">{order.supplierName}</strong> → Destination Depot: <strong className="text-slate-700">{order.depotName}</strong>
-                </div>
-              </div>
-
-              <div className="flex items-center space-x-2.5">
-                <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase border ${
-                  order.status === 'in_transit'
-                    ? 'bg-amber-100 text-amber-800 border-amber-300 animate-pulse'
-                    : order.status === 'delivered'
-                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                    : 'bg-blue-100 text-blue-800 border-blue-300'
-                }`}>
-                  {order.status.replace('_', ' ')}
-                </span>
-
-                {order.status === 'in_transit' && (
-                  <button
-                    onClick={() => handleConfirmDelivery(order.id)}
-                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs transition-all shadow-xs hover:shadow flex items-center space-x-1"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    <span>Confirm Delivery & Restock</span>
-                  </button>
-                )}
-
-                {order.status === 'delivered' && (
-                  <span className="text-emerald-700 font-bold text-xs flex items-center space-x-1">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    <span>Restocked</span>
-                  </span>
-                )}
-              </div>
+          {replenishments.length === 0 ? (
+            <div className="p-6 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+              No active replenishment orders. Click "Issue Replenishment Order" to requisition stock.
             </div>
-          ))}
+          ) : (
+            replenishments.map((order) => (
+              <div
+                key={order.id}
+                className="bg-slate-50/80 border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+              >
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <span className="font-mono font-bold text-blue-600 bg-white px-2 py-0.5 rounded border border-slate-200">
+                      {order.id}
+                    </span>
+                    <span className="font-bold text-slate-900 text-sm">
+                      {order.quantity} Units of {order.resourceType.replace('_', ' ')}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 uppercase">
+                      {order.priority}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-1">
+                    Supplier: <strong className="text-slate-700">{order.supplierName}</strong> → Destination Depot:{' '}
+                    <strong className="text-slate-700">{order.depotName}</strong>
+                    {order.deliveredAt && (
+                      <span className="ml-2 font-mono text-[10.5px] text-emerald-700">
+                        (Restocked: {new Date(order.deliveredAt).toLocaleTimeString()})
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-2.5">
+                  <span
+                    className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase border ${
+                      order.status === 'in_transit'
+                        ? 'bg-amber-100 text-amber-800 border-amber-300 animate-pulse'
+                        : order.status === 'delivered'
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                        : 'bg-blue-100 text-blue-800 border-blue-300'
+                    }`}
+                  >
+                    {order.status.replace('_', ' ')}
+                  </span>
+
+                  {order.status === 'in_transit' && (
+                    <button
+                      onClick={() => handleConfirmDelivery(order.id)}
+                      disabled={processingOrderId === order.id}
+                      className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs transition-all shadow-xs hover:shadow flex items-center space-x-1 cursor-pointer disabled:opacity-50"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>{processingOrderId === order.id ? 'Restocking...' : 'Confirm Delivery & Restock'}</span>
+                    </button>
+                  )}
+
+                  {order.status === 'delivered' && (
+                    <span className="text-emerald-700 font-bold text-xs flex items-center space-x-1">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <span>Restocked</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
 
-      {/* Replenishment Order Modal */}
-      {showOrderModal && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <form
-            onSubmit={handleCreateOrder}
-            className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl"
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-slate-900">Create Supplier Replenishment Request</h3>
-              <button
-                type="button"
-                onClick={() => setShowOrderModal(false)}
-                className="text-slate-400 hover:text-slate-600"
+      {/* Linked Demands & Deficit Queue */}
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs space-y-4">
+        <div className="pb-3 border-b border-slate-100">
+          <h2 className="text-sm font-bold text-slate-900 flex items-center space-x-2">
+            <Boxes className="w-4 h-4 text-indigo-600" />
+            <span>Live Demand Queue Linked to Depot Inventories</span>
+          </h2>
+          <p className="text-[11px] text-slate-500 mt-0.5">
+            Demands actively reserving stock or pending fulfillment from warehouse depots.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          {activeRequests.length === 0 ? (
+            <div className="p-4 text-center text-xs text-slate-400">No active relief demands.</div>
+          ) : (
+            activeRequests.map((req) => (
+              <div
+                key={req.id}
+                className="bg-slate-50/80 border border-slate-200/90 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
               >
-                <X className="w-4 h-4" />
-              </button>
+                <div className="flex items-center space-x-2.5">
+                  <span className="font-mono font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200/70">
+                    {req.id}
+                  </span>
+                  <span className="font-semibold text-slate-900 capitalize">
+                    {req.resourceType.replace('_', ' ')}
+                  </span>
+                  <span className="text-slate-400">•</span>
+                  <span className="text-slate-600 font-medium">{req.location.zoneName}</span>
+                  <span className="text-slate-400">•</span>
+                  <span className="text-slate-600">{req.requesterName}</span>
+                </div>
+
+                <div className="flex items-center space-x-3">
+                  <div className="flex items-center space-x-2 text-[11px]">
+                    <span className="text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                      Allocated: {req.allocatedQty}
+                    </span>
+                    {req.unfulfilledQty > 0 ? (
+                      <span className="text-amber-800 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                        Deficit: {req.unfulfilledQty}
+                      </span>
+                    ) : (
+                      <span className="text-emerald-800 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                        100% Met
+                      </span>
+                    )}
+                  </div>
+
+                  {req.allocatedDepotId && (
+                    <span className="font-mono text-[10px] text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200">
+                      {req.allocatedDepotId}
+                    </span>
+                  )}
+
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                      req.requestStatus === 'delivered'
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                        : req.requestStatus === 'dispatched'
+                        ? 'bg-sky-50 text-sky-800 border-sky-200'
+                        : req.requestStatus === 'fully_allocated'
+                        ? 'bg-blue-50 text-blue-800 border-blue-200'
+                        : 'bg-amber-50 text-amber-800 border-amber-200'
+                    }`}
+                  >
+                    {req.requestStatus.replace('_', ' ')}
+                  </span>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* Replenishment Order Right Drawer */}
+      {showOrderDrawer && (
+        <div 
+          className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex justify-end animate-in fade-in duration-200"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowOrderDrawer(false);
+          }}
+        >
+          <div className="bg-white w-full max-w-md h-full shadow-2xl border-l border-slate-200 flex flex-col justify-between overflow-y-auto animate-in slide-in-from-right duration-300">
+            {/* Drawer Header */}
+            <div>
+              <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 flex items-center space-x-2">
+                    <Truck className="w-4 h-4 text-blue-600" />
+                    <span>Issue Replenishment Request</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Requisition emergency stock to restock staging warehouse inventory.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowOrderDrawer(false)}
+                  className="w-8 h-8 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 flex items-center justify-center cursor-pointer transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Context Summary Pill */}
+              <div className="p-5 bg-slate-50 border-b border-slate-200/80 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    Target Depot & Resource
+                  </span>
+                  <span className="font-mono text-[10px] font-bold text-blue-700 bg-blue-100/70 px-2 py-0.5 rounded border border-blue-200">
+                    {currentTargetDepot?.id}
+                  </span>
+                </div>
+                <div className="text-xs font-bold text-slate-900">
+                  {currentTargetDepot?.name}
+                </div>
+                <div className="grid grid-cols-3 gap-2 pt-2 text-[11px]">
+                  <div className="bg-white p-2 rounded-lg border border-slate-200">
+                    <span className="text-slate-400 block text-[10px]">Current Stock</span>
+                    <strong className="text-slate-900 font-mono text-xs">
+                      {currentTargetStock?.availableStock ?? 0}
+                    </strong>
+                  </div>
+                  <div className="bg-white p-2 rounded-lg border border-slate-200">
+                    <span className="text-slate-400 block text-[10px]">Safety Buffer</span>
+                    <strong className="text-slate-900 font-mono text-xs">
+                      {currentTargetBuffer}
+                    </strong>
+                  </div>
+                  <div className="bg-white p-2 rounded-lg border border-slate-200">
+                    <span className="text-slate-400 block text-[10px]">Projected Stock</span>
+                    <strong className="text-emerald-700 font-mono text-xs">
+                      {(currentTargetStock?.availableStock ?? 0) + (parseInt(orderQty, 10) || 0)}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Form Content */}
+              <form id="replenish-form" onSubmit={handleCreateOrder} className="p-5 space-y-4 text-xs">
+                {/* 1. Resource Selector */}
+                <div>
+                  <label className="block font-bold text-slate-700 mb-2">Select Resource</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {RESOURCE_DEFS.map(({ key, label, unit, icon: Icon, color }) => {
+                      const isSelected = selectedResource === key;
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => setSelectedResource(key)}
+                          className={`p-2.5 rounded-xl border flex items-center space-x-2 text-left transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-blue-50/80 border-blue-400 ring-2 ring-blue-500/20 text-blue-950 font-bold'
+                              : 'bg-slate-50/60 border-slate-200 hover:bg-slate-100 text-slate-700'
+                          }`}
+                        >
+                          <Icon className={`w-4 h-4 ${color}`} />
+                          <div>
+                            <div className="text-xs leading-none">{label}</div>
+                            <span className="text-[10px] text-slate-400 font-normal">{unit}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 2. Destination Depot Selector */}
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Destination Depot</label>
+                  <select
+                    value={selectedDepotId}
+                    onChange={(e) => setSelectedDepotId(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:border-blue-500"
+                  >
+                    {depots.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.id} — {d.name} ({d.zoneName})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 3. Quantity input & Quick Chips */}
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="font-bold text-slate-700">Requisition Quantity</label>
+                    <span className="text-[10px] text-slate-400">
+                      Unit: {RESOURCE_DEFS.find((r) => r.key === selectedResource)?.unit}
+                    </span>
+                  </div>
+                  <input
+                    type="number"
+                    min="10"
+                    step="10"
+                    required
+                    value={orderQty}
+                    onChange={(e) => setOrderQty(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono font-bold text-slate-900 focus:outline-none focus:border-blue-500"
+                  />
+                  <div className="flex items-center space-x-1.5 mt-2">
+                    {['+100', '+250', '+500', '+1000'].map((chip) => {
+                      const addVal = parseInt(chip.replace('+', ''), 10);
+                      return (
+                        <button
+                          key={chip}
+                          type="button"
+                          onClick={() => {
+                            const cur = parseInt(orderQty, 10) || 0;
+                            setOrderQty(String(cur + addVal));
+                          }}
+                          className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-mono text-[10px] font-bold rounded-md border border-slate-200 transition-colors cursor-pointer"
+                        >
+                          {chip}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 4. Supplier / Stockpile */}
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Supplier / Strategic Stockpile</label>
+                  <select
+                    value={selectedSupplier}
+                    onChange={(e) => setSelectedSupplier(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="National Disaster Reserve Hub">National Disaster Reserve Hub (Central)</option>
+                    <option value="Red Cross Regional Logistics Center">Red Cross Regional Logistics Center</option>
+                    <option value="State Emergency Medical Stockpile">State Emergency Medical Stockpile</option>
+                    <option value="Armed Forces Staging Command">Armed Forces Staging Command</option>
+                  </select>
+                </div>
+
+                {/* 5. Priority */}
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Logistics Priority</label>
+                  <select
+                    value={orderPriority}
+                    onChange={(e) => setOrderPriority(e.target.value as 'emergency' | 'high' | 'standard')}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="emergency">🚨 Emergency (Immediate Dispatch)</option>
+                    <option value="high">⚡ High Priority (Within 2 Hours)</option>
+                    <option value="standard">📦 Standard Buffer Replenishment</option>
+                  </select>
+                </div>
+              </form>
             </div>
 
-            <p className="text-xs text-slate-600">
-              Requisition critical stock from regional stockpiles and certified suppliers for affected depots.
-            </p>
-
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Resource Required</label>
-                <select
-                  value={selectedResource}
-                  onChange={(e) => setSelectedResource(e.target.value as ResourceType)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none"
-                >
-                  <option value="drinking_water">Drinking Water (Liters)</option>
-                  <option value="medical_supplies">Medical Supplies (Kits)</option>
-                  <option value="food_rations">Food Rations (Packs)</option>
-                  <option value="shelter_kits">Shelter Kits (Tents)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Quantity</label>
-                <input
-                  type="number"
-                  min="50"
-                  required
-                  value={orderQty}
-                  onChange={(e) => setOrderQty(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Destination Depot</label>
-                <select
-                  value={selectedDepotId}
-                  onChange={(e) => setSelectedDepotId(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none"
-                >
-                  {depots.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Supplier / Stockpile</label>
-                <select
-                  value={selectedSupplier}
-                  onChange={(e) => setSelectedSupplier(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none"
-                >
-                  <option value="National Disaster Reserve Hub">National Disaster Reserve Hub</option>
-                  <option value="Red Cross Regional Logistics Center">Red Cross Regional Logistics Center</option>
-                  <option value="State Emergency Medical Stockpile">State Emergency Medical Stockpile</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+            {/* Drawer Footer Actions */}
+            <div className="p-5 border-t border-slate-100 bg-slate-50/50 flex items-center justify-end space-x-2.5">
               <button
                 type="button"
-                onClick={() => setShowOrderModal(false)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"
+                onClick={() => setShowOrderDrawer(false)}
+                className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm"
+                form="replenish-form"
+                disabled={isSubmittingOrder}
+                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm hover:shadow flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
               >
-                Transmit Order
+                <Truck className="w-3.5 h-3.5" />
+                <span>{isSubmittingOrder ? 'Transmitting Order...' : 'Dispatch Shipment'}</span>
               </button>
             </div>
-          </form>
+          </div>
         </div>
       )}
     </div>

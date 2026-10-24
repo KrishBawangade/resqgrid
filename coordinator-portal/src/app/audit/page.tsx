@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { INITIAL_AUDIT_LOGS } from '@/lib/data/initialScenario';
 import { AuditLogEntry } from '@/lib/types';
 import { 
@@ -9,13 +9,73 @@ import {
   ShieldAlert, 
   Boxes, 
   Truck, 
-  CheckCircle2,
-  Clock
+  CheckCircle2, 
+  RefreshCw
 } from 'lucide-react';
 
 export default function CoordinatorAuditPage() {
   const [logs, setLogs] = useState<AuditLogEntry[]>(INITIAL_AUDIT_LOGS);
   const [filterCategory, setFilterCategory] = useState<string>('ALL');
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+
+  const fetchAuditLogs = useCallback(async (isManual = false) => {
+    if (isManual) setIsSyncing(true);
+    try {
+      const res = await fetch('/api/audit', { cache: 'no-store' });
+      if (res.ok) {
+        const data: AuditLogEntry[] = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setLogs(data);
+        }
+      }
+      setLastSyncTime(new Date());
+    } catch (err) {
+      console.warn('Failed to fetch audit logs:', err);
+    } finally {
+      if (isManual) setIsSyncing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAuditLogs();
+
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource('/api/requests/stream');
+      eventSource.onmessage = (event) => {
+        if (!event.data) return;
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === 'AUDIT_LOG_ADDED' && payload.data) {
+            const entry = payload.data as AuditLogEntry;
+            setLogs((prev) => [entry, ...prev.filter((l) => l.id !== entry.id)]);
+            setLastSyncTime(new Date());
+          }
+        } catch {}
+      };
+    } catch (err) {
+      console.warn('SSE connection failed in audit:', err);
+    }
+
+    let channel: BroadcastChannel | null = null;
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        channel = new BroadcastChannel('resqgrid_realtime');
+        channel.onmessage = (event) => {
+          if (event.data?.type === 'AUDIT_LOG_ADDED' && event.data?.data) {
+            const entry = event.data.data as AuditLogEntry;
+            setLogs((prev) => [entry, ...prev.filter((l) => l.id !== entry.id)]);
+          }
+        };
+      } catch {}
+    }
+
+    return () => {
+      if (eventSource) eventSource.close();
+      if (channel) channel.close();
+    };
+  }, [fetchAuditLogs]);
 
   const filtered = logs.filter((l) => {
     if (filterCategory === 'ALL') return true;
@@ -75,21 +135,38 @@ export default function CoordinatorAuditPage() {
           </p>
         </div>
 
-        {/* Filter Category */}
-        <div className="flex items-center space-x-1 bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 shadow-2xs text-xs">
-          <Filter className="w-3.5 h-3.5 text-slate-400" />
-          <select
-            value={filterCategory}
-            onChange={(e) => setFilterCategory(e.target.value)}
-            className="bg-transparent text-slate-700 font-semibold focus:outline-none cursor-pointer"
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={() => fetchAuditLogs(true)}
+            disabled={isSyncing}
+            className="px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold transition-all shadow-2xs flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+            title="Reload from Neon DB"
           >
-            <option value="ALL">All Event Types</option>
-            <option value="OVERRIDE">Priority Overrides</option>
-            <option value="ALLOCATION">Stock Allocations</option>
-            <option value="REPLENISHMENT">Replenishment</option>
-            <option value="VERIFICATION">Verification</option>
-          </select>
+            <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${isSyncing ? 'animate-spin text-blue-600' : ''}`} />
+            <span>{isSyncing ? 'Syncing...' : 'Sync'}</span>
+          </button>
+
+          {/* Filter Category */}
+          <div className="flex items-center space-x-1 bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 shadow-2xs text-xs">
+            <Filter className="w-3.5 h-3.5 text-slate-400" />
+            <select
+              value={filterCategory}
+              onChange={(e) => setFilterCategory(e.target.value)}
+              className="bg-transparent text-slate-700 font-semibold focus:outline-none cursor-pointer"
+            >
+              <option value="ALL">All Event Types</option>
+              <option value="OVERRIDE">Priority Overrides</option>
+              <option value="ALLOCATION">Stock Allocations</option>
+              <option value="REPLENISHMENT">Replenishment</option>
+              <option value="VERIFICATION">Verification</option>
+            </select>
+          </div>
         </div>
+      </div>
+
+      <div className="text-[11px] text-slate-500 font-mono px-1 flex items-center justify-between">
+        <span>Append-Only Ledger • Real-time event streaming</span>
+        <span>Last updated: {lastSyncTime ? lastSyncTime.toLocaleTimeString() : 'Connecting...'}</span>
       </div>
 
       {/* Audit Table */}

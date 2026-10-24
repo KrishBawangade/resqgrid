@@ -176,6 +176,36 @@ This living document logs all major architectural decisions (ADRs), milestone pr
   1. Geographic coherence: judges and operators see consistent, realistic Mumbai coordinates and sector names across all views.
   2. Professional aesthetics: removes jarring blinking and label overlap in favor of a calm, crisp command-center cartography.
 
+### ADR-013: Reactive Depot Stock Synchronization, Strict Delivery Verification & Actionable Deficit Banners
+- **Date:** 2026-10-24
+- **Status:** Accepted
+- **Context:** The inventory module previously featured static warehouse stock, arbitrary `/ 1000 L` capacity caps, instant "+100 Restock" buttons that bypassed supplier verification, and persistent banners that cluttered the screen even when reserves were adequate. Furthermore, shortages were hardcoded to a single depot/resource rather than reacting dynamically to live citizen demand.
+- **Decision:**
+  1. **Full Database & API Integration:**
+     - Connected Neon PostgreSQL tables (`ReliefDepot`, `DepotStock`, `ReplenishmentOrder`, `AuditLog`) with dedicated server route handlers (`/api/depots`, `/api/replenishment`, `/api/audit`).
+     - Replaced arbitrary capacity caps with clean, real-time available stock levels.
+     - Implemented fixed minimum safety buffers (Drinking Water: 150 L, Food Rations: 100 Packs, Medical Supplies: 25 Kits, Shelter Kits: 15 Tents) with dynamic `LOW` (amber) and `Adequate` (emerald) status badges.
+  2. **Total Combined Regional Stock Overview:**
+     - Added a system-wide KPI summary matrix above depot cards aggregating total available stock, active reservations, and in-transit supplier shipments across all 3 staging depots.
+  3. **Ergonomic Slide-Over Replenishment Drawer:**
+     - Replaced centered modal dialogs with a slide-over drawer from the right, providing full vertical canvas and preserving visual context of the main inventory board.
+     - Includes live depot context (Current Stock → Projected Stock after delivery), visual resource selector, and quick `+100`, `+250`, `+500`, `+1000` quantity increment chips.
+     - Card-level **Restock** buttons allow coordinators to requisition replenishment pre-configured for any specific depot and resource.
+  4. **Strict Verified Delivery Workflow & Immutable Audit Log:**
+     - Warehouse stock increments in Neon DB *only* when the coordinator verifies delivery in the replenishment orders table via `confirm_delivery`.
+     - Automatically logs immutable records into the `AuditLog` table and streams updates to `/audit`.
+  5. **Actionable Demand Deficit Banners (Exception Management):**
+     - Made a strict architectural distinction between "Low Stock" (below safety buffer, shown directly on depot cards) vs. "Demand Deficit" (citizen queue demand exceeding available physical stock, `Demand > Stock`).
+     - Screen-wide alert banners are strictly reserved for real demand deficits.
+     - Clicking "Restock →" and dispatching a replenishment order (`in_transit`) automatically removes the deficit banner immediately, acknowledging the shortage is actively handled.
+     - Removed all non-actionable green and blue persistent banners to maintain a clutter-free, professional command console.
+  6. **Dynamic Top Navbar Shortage Indicator:**
+     - Converted the hardcoded `Shortage` pill in `CoordinatorHeader.tsx` into a real-time reactive indicator that only renders when an unaddressed demand deficit exists in the system.
+- **Rationale:**
+  1. High operational clarity: coordinators are only alerted when an actionable crisis requires immediate intervention.
+  2. Realistic supply chain integrity: stock increases strictly through verified physical shipments rather than arbitrary increments.
+  3. Real-time durability: all stock changes, reservations, orders, and audits are persisted in Neon PostgreSQL and broadcast live via SSE and `BroadcastChannel`.
+
 ---
 
 ## Build Milestones & Phase Progress
@@ -186,11 +216,12 @@ This living document logs all major architectural decisions (ADRs), milestone pr
 | **Phase 1** | Project Scaffolding & Multi-App Separation (`citizen-portal` & `coordinator-portal`) | **Completed** | Both standalone apps scaffolded with Tailwind v4; root `.gitignore` configured |
 | **Phase 2** | UI Platform 1: Citizen / Volunteer Portal (`citizen-portal`) | **Completed** | Multi-resource intake, AI triage engine, interactive Leaflet map picker with flood-zone GPS fetch, anti-gaming design, and live 6-stage status tracker |
 | **Phase 3** | UI Platform 2: Command Center Dashboard (`coordinator-portal`) | **Completed** | OSM HOT disaster map, flood polygon, 4-tier lifecycle queue, score inspector |
-| **Phase 4** | UI Platform 2: Inventory, Shortage Alert & Replenishment Center | **Completed** | Multi-depot stock matrix, shortage calculator, supplier replenishment dispatch |
+| **Phase 4** | UI Platform 2: Inventory, Shortage Alert & Replenishment Center | **Completed** | Neon DB synced stock matrix, slide-over replenishment drawer, verified receipt restock, and auto-clearing demand-deficit banners |
 | **Phase 5** | Core Prioritization (55/20/15/10) & Stock-Aware Allocation Engines | **Completed** | Deterministic mathematical scoring, stock reservation, partial fulfillment |
 | **Phase 6** | Neon PostgreSQL + Prisma Integration & Server Route Handlers | **Completed** | Neon DB tables synced; AI triage + direct DB persistence verified end-to-end; `/api/requests` live across both portals |
-| **Phase 7** | Real-Time Cross-Portal SSE Streaming & Mumbai Operations Standardization | **Completed** | Server-Sent Events stream live; instant cross-portal updates verified with zero polling; Mumbai disaster zone standardized |
+| **Phase 7** | Real-Time Cross-Portal SSE Streaming & Mumbai Operations Standardization | **Completed** | Server-Sent Events stream live; instant cross-portal updates verified with zero polling; dynamic top nav shortage badge |
 | **Phase 8** | End-to-End Demo Scenario Controller & Verification | **In Progress** | Complete 6-stage hackathon narrative walkthrough |
+
 
 
 

@@ -12,7 +12,13 @@ if (!globalThis.__resqgrid_emitter) {
 
 export const realtimeEmitter: EventEmitter = globalThis.__resqgrid_emitter;
 
-export type RealtimeEventType = 'NEW_REQUEST' | 'REQUEST_UPDATED' | 'REQUEST_DELETED';
+export type RealtimeEventType = 
+  | 'NEW_REQUEST' 
+  | 'REQUEST_UPDATED' 
+  | 'REQUEST_DELETED'
+  | 'DEPOTS_UPDATED'
+  | 'REPLENISHMENT_UPDATED'
+  | 'AUDIT_LOG_ADDED';
 
 export interface RealtimeEventPayload {
   type: RealtimeEventType;
