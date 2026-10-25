@@ -206,6 +206,35 @@ This living document logs all major architectural decisions (ADRs), milestone pr
   2. Realistic supply chain integrity: stock increases strictly through verified physical shipments rather than arbitrary increments.
   3. Real-time durability: all stock changes, reservations, orders, and audits are persisted in Neon PostgreSQL and broadcast live via SSE and `BroadcastChannel`.
 
+### ADR-014: Real-Time SSE Resynchronization, Map Viewport Auto-Framing & Lifecycle Fulfillment Consistency
+- **Date:** 2026-10-25
+- **Status:** Accepted
+- **Context:**
+  1. TypeScript compilation error on `broadcastRealtimeEvent('REQUESTS_RESET', formatted)` due to missing `'REQUESTS_RESET'` event type in `RealtimeEventType`.
+  2. Race condition during asynchronous Leaflet dynamic import resulting in request and depot markers intermittently failing to paint on first entrance.
+  3. The fulfilled benchmark request (`REQ-1039` at Sion Trauma Clinic, lat `19.0390`) was visually cut off and omitted from the initial map view because `map.fitBounds` only calculated bounds from the hazard inundation corridor (Kurla basin) and depots, rather than all operational demands.
+  4. Inconsistent definition of `isFulfilledRequest` across the dashboard: partially allocated demands were erroneously classified as fulfilled on the map, while requests with `unfulfilledQty === 0` were missing.
+  5. The CSS transparent reset rule for custom Leaflet divIcons lacked `.custom-fulfilled-pin`, causing Leaflet's default white box and border styling artifacts.
+  6. Resilient DNS fallback resolution for Neon PostgreSQL endpoints in Node.js runtime across both portals (`coordinator-portal` and `citizen-portal`).
+- **Decision:**
+  1. **Add `'REQUESTS_RESET'` and `'REQUEST_DELETED'` Event Handlers:**
+     - Expanded `RealtimeEventType` in `coordinator-portal/src/lib/events.ts` to include `'REQUESTS_RESET'`.
+     - Added SSE client listeners in `page.tsx` and `inventory/page.tsx` to react to reset and deletion events in zero-polling real-time.
+  2. **Reactive `mapReady` State Lifecycle:**
+     - Added `mapReady` boolean state in `InteractiveDisasterMap.tsx` triggered upon Leaflet dynamic import resolution, guaranteeing that marker and depot effects always execute reliably on first mount without race conditions.
+  3. **Operational Theater Bounding Box Auto-Framing:**
+     - Included all active and fulfilled relief demands (`requests.filter(r => !isFulfilledRequest(r) || showFulfilled)`) in the initial `L.latLngBounds()` calculation with `maxZoom: 13.5`, bringing all regional requests (including `REQ-1039` in Sion) immediately into view on initial page load.
+  4. **Unified Lifecycle Fulfillment Specification:**
+     - Standardized `isFulfilledRequest` across the queue table, summary ribbon, and map pins: a demand is fulfilled if its status is `fully_allocated`, `dispatched`, or `delivered`, or if `totalUnful === 0 && totalAlloc > 0`. Demands with partial fulfillment and remaining deficits are strictly preserved in the queue.
+  5. **Leaflet divIcon CSS Transparent Reset:**
+     - Added `.custom-fulfilled-pin` to `globals.css` alongside `.custom-request-pin` and `.custom-depot-pin` to eliminate default Leaflet container boxes.
+  6. **Resilient Neon DNS Lookup Patch:**
+     - Hardened `dns.lookup` assignment in `src/lib/db.ts` across both portals to prevent DNS failures and satisfy TypeScript compiler definitions.
+- **Rationale:**
+  1. Eliminates silent render race conditions and guarantees seamless initial load aesthetics.
+  2. Ensures full geographic transparency: coordinators immediately see all demands across the operational theater without manual panning or zooming.
+  3. Maintains strict consistency between data models, queue table tabs, summary metrics, and spatial map pins.
+
 ---
 
 ## Build Milestones & Phase Progress
@@ -220,7 +249,8 @@ This living document logs all major architectural decisions (ADRs), milestone pr
 | **Phase 5** | Core Prioritization (55/20/15/10) & Stock-Aware Allocation Engines | **Completed** | Deterministic mathematical scoring, stock reservation, partial fulfillment |
 | **Phase 6** | Neon PostgreSQL + Prisma Integration & Server Route Handlers | **Completed** | Neon DB tables synced; AI triage + direct DB persistence verified end-to-end; `/api/requests` live across both portals |
 | **Phase 7** | Real-Time Cross-Portal SSE Streaming & Mumbai Operations Standardization | **Completed** | Server-Sent Events stream live; instant cross-portal updates verified with zero polling; dynamic top nav shortage badge |
-| **Phase 8** | End-to-End Demo Scenario Controller & Verification | **In Progress** | Complete 6-stage hackathon narrative walkthrough |
+| **Phase 8** | End-to-End Demo Scenario Controller & Verification | **Completed** | One-click benchmark scenario reset (`/api/scenario/reset`), full theater map auto-framing, multi-resource allocation, and real-time SSE sync |
+
 
 
 
