@@ -24,7 +24,7 @@ import {
   Truck
 } from 'lucide-react';
 
-export type QueueTabType = 'needs_attention' | 'partially_allocated' | 'fully_allocated' | 'rejected';
+export type QueueTabType = 'pending_verification' | 'needs_attention' | 'partially_allocated' | 'fully_allocated' | 'rejected';
 
 interface PrioritizedQueueTableProps {
   requests: ReliefRequest[];
@@ -83,27 +83,35 @@ export default function PrioritizedQueueTable({
   const isReqRejected = (r: ReliefRequest) =>
     r.requestStatus === 'rejected' || r.verificationStatus === 'rejected';
 
-  // 1. Needs Attention = Unallocated active requests that are NOT fulfilled, NOT partial, and NOT rejected
+  const isReqPendingVerification = (r: ReliefRequest) =>
+    !isReqRejected(r) && !isReqFulfilled(r) && (r.verificationStatus === 'pending' || r.verificationStatus === 'flagged');
+
+  // 1. Needs Attention (Active Queue) = ALL active unallocated demands (both verified & unverified) sorted by triage priority
   const needsAttentionList = requests.filter(
     (r) => !isReqRejected(r) && !isReqFulfilled(r) && !isReqPartial(r)
   );
 
-  // 2. Partially Allocated = Demands with partial stock assigned but remaining deficit
+  // 2. Pending Verification = Specifically demands awaiting coordinator/field authentication
+  const pendingVerificationList = requests.filter(isReqPendingVerification);
+
+  // 3. Partially Allocated = Demands with partial stock assigned but remaining deficit
   const partiallyAllocatedList = requests.filter(
     (r) => !isReqRejected(r) && isReqPartial(r)
   );
 
-  // 3. Fully Allocated / Fulfilled = 100% stock reserved, in transit, or delivered
+  // 4. Fully Allocated / Fulfilled = 100% stock reserved, in transit, or delivered
   const fullyAllocatedList = requests.filter(
     (r) => !isReqRejected(r) && isReqFulfilled(r)
   );
 
-  // 4. Rejected Demands
+  // 5. Rejected Demands
   const rejectedList = requests.filter((r) => isReqRejected(r));
 
   // Current tab items
   const currentTabItems = 
-    activeTab === 'needs_attention' 
+    activeTab === 'pending_verification'
+      ? pendingVerificationList
+      : activeTab === 'needs_attention' 
       ? needsAttentionList 
       : activeTab === 'partially_allocated' 
       ? partiallyAllocatedList 
@@ -150,84 +158,109 @@ export default function PrioritizedQueueTable({
 
   return (
     <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs space-y-3 flex flex-col h-[600px] overflow-hidden">
-      {/* Top 4 Tabs Segmented Control */}
+      {/* Top Tabs Wrapping Segmented Control */}
       <div className="pb-3 border-b border-slate-100 flex-shrink-0 space-y-2.5">
-        <div className="bg-slate-100/90 p-1 rounded-xl grid grid-cols-4 gap-1 border border-slate-200/70">
-          {/* Tab 1: Needs Attention */}
+        <div className="bg-slate-100/90 p-1.5 rounded-xl flex flex-wrap items-center justify-start gap-1.5 border border-slate-200/70">
+          {/* Tab 1: Needs Attention (All Active Unallocated) */}
           <button
             onClick={() => onTabChange('needs_attention')}
-            className={`px-1.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center space-x-1 cursor-pointer ${
+            className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors duration-150 cursor-pointer whitespace-nowrap shadow-2xs ${
               activeTab === 'needs_attention'
-                ? 'bg-white text-rose-700 shadow-2xs border border-rose-200/80'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-white text-rose-700 border-2 border-rose-500 shadow-xs ring-2 ring-rose-500/15'
+                : 'bg-white text-slate-700 hover:text-slate-900 border-2 border-slate-200 hover:border-slate-300 hover:bg-slate-50'
             }`}
+            title="All active unallocated demands (both verified and unverified)"
           >
-            <AlertTriangle className={`w-3.5 h-3.5 flex-shrink-0 ${activeTab === 'needs_attention' ? 'text-rose-600' : 'text-slate-400'}`} />
-            <span className="truncate">Attention</span>
-            <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold ${
+            <AlertTriangle className={`w-3.5 h-3.5 flex-shrink-0 ${activeTab === 'needs_attention' ? 'text-rose-600' : 'text-slate-500'}`} />
+            <span>Attention</span>
+            <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold border ${
               activeTab === 'needs_attention' 
-                ? 'bg-rose-100 text-rose-800' 
-                : 'bg-slate-200 text-slate-700'
+                ? 'bg-rose-100 text-rose-800 border-rose-200' 
+                : 'bg-slate-100 text-slate-700 border-slate-200'
             }`}>
               {needsAttentionList.length}
             </span>
           </button>
 
-          {/* Tab 2: Partially Allocated */}
+          {/* Tab 2: Pending Verification (Specifically Unverified) */}
+          <button
+            onClick={() => onTabChange('pending_verification')}
+            className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors duration-150 cursor-pointer whitespace-nowrap shadow-2xs ${
+              activeTab === 'pending_verification'
+                ? 'bg-white text-violet-800 border-2 border-violet-500 shadow-xs ring-2 ring-violet-500/15'
+                : 'bg-white text-slate-700 hover:text-slate-900 border-2 border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+            }`}
+            title="Intake demands specifically awaiting coordinator authentication"
+          >
+            <Clock className={`w-3.5 h-3.5 flex-shrink-0 ${activeTab === 'pending_verification' ? 'text-violet-600' : 'text-slate-500'}`} />
+            <span>To Verify</span>
+            <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold border ${
+              activeTab === 'pending_verification' 
+                ? 'bg-violet-100 text-violet-800 border-violet-200' 
+                : 'bg-slate-100 text-slate-700 border-slate-200'
+            }`}>
+              {pendingVerificationList.length}
+            </span>
+          </button>
+
+          {/* Tab 3: Partially Allocated */}
           <button
             onClick={() => onTabChange('partially_allocated')}
-            className={`px-1.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center space-x-1 cursor-pointer ${
+            className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors duration-150 cursor-pointer whitespace-nowrap shadow-2xs ${
               activeTab === 'partially_allocated'
-                ? 'bg-white text-amber-800 shadow-2xs border border-amber-200/80'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-white text-amber-800 border-2 border-amber-500 shadow-xs ring-2 ring-amber-500/15'
+                : 'bg-white text-slate-700 hover:text-slate-900 border-2 border-slate-200 hover:border-slate-300 hover:bg-slate-50'
             }`}
+            title="Demands with remaining unfulfilled deficit"
           >
-            <Hourglass className={`w-3.5 h-3.5 flex-shrink-0 ${activeTab === 'partially_allocated' ? 'text-amber-600' : 'text-slate-400'}`} />
-            <span className="truncate">Partial</span>
-            <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold ${
+            <Hourglass className={`w-3.5 h-3.5 flex-shrink-0 ${activeTab === 'partially_allocated' ? 'text-amber-600' : 'text-slate-500'}`} />
+            <span>Partial</span>
+            <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold border ${
               activeTab === 'partially_allocated' 
-                ? 'bg-amber-100 text-amber-800' 
-                : 'bg-slate-200 text-slate-700'
+                ? 'bg-amber-100 text-amber-800 border-amber-200' 
+                : 'bg-slate-100 text-slate-700 border-slate-200'
             }`}>
               {partiallyAllocatedList.length}
             </span>
           </button>
 
-          {/* Tab 3: Fully Allocated */}
+          {/* Tab 4: Fully Allocated */}
           <button
             onClick={() => onTabChange('fully_allocated')}
-            className={`px-1.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center space-x-1 cursor-pointer ${
+            className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors duration-150 cursor-pointer whitespace-nowrap shadow-2xs ${
               activeTab === 'fully_allocated'
-                ? 'bg-white text-emerald-800 shadow-2xs border border-emerald-200/80'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-white text-emerald-800 border-2 border-emerald-500 shadow-xs ring-2 ring-emerald-500/15'
+                : 'bg-white text-slate-700 hover:text-slate-900 border-2 border-slate-200 hover:border-slate-300 hover:bg-slate-50'
             }`}
+            title="100% stock reserved, dispatched, or delivered"
           >
-            <CheckCircle2 className={`w-3.5 h-3.5 flex-shrink-0 ${activeTab === 'fully_allocated' ? 'text-emerald-600' : 'text-slate-400'}`} />
-            <span className="truncate">Fulfilled</span>
-            <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold ${
+            <CheckCircle2 className={`w-3.5 h-3.5 flex-shrink-0 ${activeTab === 'fully_allocated' ? 'text-emerald-600' : 'text-slate-500'}`} />
+            <span>Fulfilled</span>
+            <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold border ${
               activeTab === 'fully_allocated' 
-                ? 'bg-emerald-100 text-emerald-800' 
-                : 'bg-slate-200 text-slate-700'
+                ? 'bg-emerald-100 text-emerald-800 border-emerald-200' 
+                : 'bg-slate-100 text-slate-700 border-slate-200'
             }`}>
               {fullyAllocatedList.length}
             </span>
           </button>
 
-          {/* Tab 4: Rejected / Flagged */}
+          {/* Tab 5: Rejected / Flagged */}
           <button
             onClick={() => onTabChange('rejected')}
-            className={`px-1.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center space-x-1 cursor-pointer ${
+            className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors duration-150 cursor-pointer whitespace-nowrap shadow-2xs ${
               activeTab === 'rejected'
-                ? 'bg-white text-slate-900 shadow-2xs border border-slate-300'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-white text-slate-900 border-2 border-slate-700 shadow-xs ring-2 ring-slate-500/15'
+                : 'bg-white text-slate-700 hover:text-slate-900 border-2 border-slate-200 hover:border-slate-300 hover:bg-slate-50'
             }`}
+            title="Denied or out-of-zone requests"
           >
-            <Ban className={`w-3.5 h-3.5 flex-shrink-0 ${activeTab === 'rejected' ? 'text-slate-800' : 'text-slate-400'}`} />
-            <span className="truncate">Rejected</span>
-            <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold ${
+            <Ban className={`w-3.5 h-3.5 flex-shrink-0 ${activeTab === 'rejected' ? 'text-slate-800' : 'text-slate-500'}`} />
+            <span>Rejected</span>
+            <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold border ${
               activeTab === 'rejected' 
-                ? 'bg-slate-800 text-white' 
-                : 'bg-slate-200 text-slate-700'
+                ? 'bg-slate-800 text-white border-slate-700' 
+                : 'bg-slate-100 text-slate-700 border-slate-200'
             }`}>
               {rejectedList.length}
             </span>
@@ -237,7 +270,8 @@ export default function PrioritizedQueueTable({
         {/* Tab Subtitle & Resource Filter */}
         <div className="flex items-center justify-between text-xs pt-0.5">
           <span className="text-[11px] text-slate-500 font-medium">
-            {activeTab === 'needs_attention' && 'Unallocated demands requiring triage & dispatch'}
+            {activeTab === 'needs_attention' && 'All active unallocated demands (ranked by triage priority)'}
+            {activeTab === 'pending_verification' && 'Unverified demands specifically awaiting coordinator authentication'}
             {activeTab === 'partially_allocated' && 'Deficits preserved in queue awaiting depot stock'}
             {activeTab === 'fully_allocated' && '100% fulfilled requests ready or in transit'}
             {activeTab === 'rejected' && 'Denied, duplicate, or out-of-zone requests with audit trail'}
@@ -260,17 +294,38 @@ export default function PrioritizedQueueTable({
       </div>
 
       {/* Cards List (Scrollable) */}
-      <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
-        {filtered.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-2 bg-slate-50/60 rounded-xl border border-dashed border-slate-200">
+      <div className="flex-1 overflow-y-auto pr-1">
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={activeTab + (filterResource ? `_${filterResource}` : '')}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="space-y-2.5 pb-2 min-h-full flex flex-col"
+          >
+            {filtered.length === 0 ? (
+              <div className="flex-1 min-h-[260px] flex flex-col items-center justify-center text-center p-6 space-y-2 bg-slate-50/60 rounded-xl border border-dashed border-slate-200">
+            {activeTab === 'pending_verification' && (
+              <>
+                <div className="w-10 h-10 rounded-full bg-violet-50 text-violet-600 flex items-center justify-center">
+                  <CheckCircle2 className="w-5 h-5" />
+                </div>
+                <div className="font-bold text-slate-800 text-xs">All Demands Verified!</div>
+                <p className="text-[11px] text-slate-500 max-w-xs">
+                  Zero verification backlog. All incoming requests have been authenticated and are ready for stock allocation.
+                </p>
+              </>
+            )}
+
             {activeTab === 'needs_attention' && (
               <>
                 <div className="w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center">
                   <Sparkles className="w-5 h-5" />
                 </div>
-                <div className="font-bold text-slate-800 text-xs">No Pending Requests!</div>
+                <div className="font-bold text-slate-800 text-xs">No Pending Allocations!</div>
                 <p className="text-[11px] text-slate-500 max-w-xs">
-                  All relief demands have been addressed and moved to partial, full allocation, or rejected.
+                  All verified demands have been assigned stock and moved to partial, full allocation, or rejected.
                 </p>
               </>
             )}
@@ -310,10 +365,9 @@ export default function PrioritizedQueueTable({
                 </p>
               </>
             )}
-          </div>
-        ) : (
-          <AnimatePresence>
-            {filtered.map((req, idx) => {
+              </div>
+            ) : (
+              filtered.map((req, idx) => {
               const isSelected = selectedRequestId === req.id;
               const isCritical = req.priorityScore >= 85;
               const isHigh = req.priorityScore >= 70 && req.priorityScore < 85;
@@ -330,15 +384,10 @@ export default function PrioritizedQueueTable({
               const totalUnfulfilled = Math.max(0, totalRequested - totalAllocated);
 
               return (
-                <motion.div
+                <div
                   key={req.id}
-                  layout
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ type: 'spring', damping: 25, stiffness: 250 }}
                   onClick={() => onSelectRequest(req)}
-                  className={`p-3.5 rounded-xl border transition-all cursor-pointer text-xs space-y-2.5 ${
+                  className={`p-3.5 rounded-xl border transition-colors duration-150 cursor-pointer text-xs space-y-2.5 ${
                     isSelected
                       ? 'bg-blue-50/90 border-blue-400 ring-2 ring-blue-500/20 shadow-xs'
                       : isRejected
@@ -391,6 +440,11 @@ export default function PrioritizedQueueTable({
                           <XCircle className="w-3 h-3 text-rose-600" />
                           <span>Rejected</span>
                         </span>
+                      ) : activeTab === 'pending_verification' ? (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-violet-50 text-violet-800 border border-violet-200 flex items-center space-x-1">
+                          <Clock className="w-3 h-3 text-violet-600" />
+                          <span>Awaiting Verification</span>
+                        </span>
                       ) : activeTab === 'needs_attention' ? (
                         isPending ? (
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 flex items-center space-x-1">
@@ -400,7 +454,7 @@ export default function PrioritizedQueueTable({
                         ) : (
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 flex items-center space-x-1">
                             <AlertTriangle className="w-3 h-3 text-rose-500" />
-                            <span>Unallocated</span>
+                            <span>Ready to Allocate</span>
                           </span>
                         )
                       ) : activeTab === 'partially_allocated' ? (
@@ -539,6 +593,27 @@ export default function PrioritizedQueueTable({
                           <RotateCcw className="w-3 h-3" />
                           <span>Restore to Queue</span>
                         </button>
+                      ) : activeTab === 'pending_verification' ? (
+                        <>
+                          <button
+                            onClick={(e) => handleOpenReject(e, req)}
+                            className="text-slate-500 hover:text-rose-700 hover:bg-rose-50 px-2 py-0.5 rounded text-[10.5px] font-semibold transition-colors"
+                            title="Reject or flag request"
+                          >
+                            Reject
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onVerify(req.id);
+                            }}
+                            className="text-violet-800 bg-violet-50 hover:bg-violet-100 px-2.5 py-1 rounded-md font-bold flex items-center space-x-1 border border-violet-200 transition-colors shadow-2xs hover:shadow-xs cursor-pointer"
+                            title="Verify and authenticate relief demand"
+                          >
+                            <CheckCircle2 className="w-3 h-3 text-violet-600" />
+                            <span>Verify</span>
+                          </button>
+                        </>
                       ) : activeTab === 'needs_attention' ? (
                         <>
                           <button
@@ -555,9 +630,10 @@ export default function PrioritizedQueueTable({
                                 e.stopPropagation();
                                 onVerify(req.id);
                               }}
-                              className="text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-md font-bold flex items-center space-x-1 border border-emerald-200 transition-colors"
+                              className="text-violet-800 bg-violet-50 hover:bg-violet-100 px-2.5 py-1 rounded-md font-bold flex items-center space-x-1 border border-violet-200 transition-colors shadow-2xs hover:shadow-xs cursor-pointer"
+                              title="Verify and authenticate relief demand"
                             >
-                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              <CheckCircle2 className="w-3 h-3 text-violet-600" />
                               <span>Verify</span>
                             </button>
                           ) : onAllocate ? (
@@ -566,7 +642,7 @@ export default function PrioritizedQueueTable({
                                 e.stopPropagation();
                                 onAllocate(req.id);
                               }}
-                              className="text-blue-700 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-md font-bold flex items-center space-x-1 border border-blue-200 transition-all shadow-2xs hover:shadow-xs cursor-pointer"
+                              className="text-blue-700 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-md font-bold flex items-center space-x-1 border border-blue-200 transition-colors shadow-2xs hover:shadow-xs cursor-pointer"
                               title="Allocate warehouse stock to demand"
                             >
                               <Boxes className="w-3 h-3 text-blue-600" />
@@ -592,7 +668,7 @@ export default function PrioritizedQueueTable({
                                 e.stopPropagation();
                                 onDeliver(req.id);
                               }}
-                              className="text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-lg text-[10.5px] font-bold flex items-center space-x-1 border border-emerald-300 transition-all shadow-2xs hover:shadow-xs cursor-pointer"
+                              className="text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-lg text-[10.5px] font-bold flex items-center space-x-1 border border-emerald-300 transition-colors shadow-2xs hover:shadow-xs cursor-pointer"
                               title="Confirm citizen handover & 100% fulfill demand"
                             >
                               <CheckCircle2 className="w-3 h-3 text-emerald-600" />
@@ -610,7 +686,7 @@ export default function PrioritizedQueueTable({
                               e.stopPropagation();
                               onDispatch(req.id);
                             }}
-                            className="text-sky-700 bg-sky-50 hover:bg-sky-100 px-2.5 py-1 rounded-lg text-[10.5px] font-bold flex items-center space-x-1 border border-sky-200 transition-all shadow-2xs hover:shadow-xs cursor-pointer"
+                            className="text-sky-700 bg-sky-50 hover:bg-sky-100 px-2.5 py-1 rounded-lg text-[10.5px] font-bold flex items-center space-x-1 border border-sky-200 transition-colors shadow-2xs hover:shadow-xs cursor-pointer"
                             title="Dispatch relief cargo into transit corridor"
                           >
                             <Truck className="w-3 h-3 text-sky-600" />
@@ -630,11 +706,11 @@ export default function PrioritizedQueueTable({
                       )}
                     </div>
                   </div>
-                </motion.div>
+                </div>
               );
-            })}
-          </AnimatePresence>
-        )}
+            }))}
+          </motion.div>
+        </AnimatePresence>
       </div>
 
       {/* Reject Request Modal */}

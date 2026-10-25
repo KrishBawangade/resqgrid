@@ -62,7 +62,7 @@ export async function POST() {
           waitingMinutes: req.waitingMinutes,
           aiTriageInsight: req.aiTriageInsight || null,
           aiConfidence: req.aiConfidence || null,
-          aiTriageDetails: req.stageTimestamps ? { stageTimestamps: req.stageTimestamps } : null,
+          aiTriageDetails: req.stageTimestamps ? ({ stageTimestamps: req.stageTimestamps } as object) : undefined,
           rejectionReason: req.rejectionReason || null,
         },
       });

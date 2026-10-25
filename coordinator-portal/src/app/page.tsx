@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import dynamic from 'next/dynamic';
-import { AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { 
   INITIAL_REQUESTS, 
   INITIAL_DEPOTS, 
@@ -745,13 +745,23 @@ export default function CoordinatorOperationsPage() {
 
   return (
     <div className="space-y-4">
-      {/* Toast Notification */}
-      {toastMessage && (
-        <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-xl shadow-xl text-xs font-semibold flex items-center space-x-2 border border-slate-700 animate-bounce">
-          <Info className="w-4 h-4 text-blue-400" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
+      {/* Toast Notification (Sophisticated Spring Entry/Exit) */}
+      <AnimatePresence>
+        {toastMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: 16, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.95 }}
+            transition={{ type: 'spring', stiffness: 350, damping: 28 }}
+            className="fixed bottom-5 right-5 z-50 bg-slate-900/95 backdrop-blur-md text-white px-4 py-2.5 rounded-xl shadow-2xl text-xs font-semibold flex items-center space-x-2.5 border border-slate-700/80"
+          >
+            <div className="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center flex-shrink-0 border border-blue-500/30">
+              <Info className="w-3.5 h-3.5" />
+            </div>
+            <span>{toastMessage}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Active Incident Headline Briefing */}
       <IncidentBriefingBanner />
@@ -800,7 +810,7 @@ export default function CoordinatorOperationsPage() {
         depots={depots}
         onSelectPendingVerification={() => {
           setSelectedRequest(null);
-          setQueueTab('needs_attention');
+          setQueueTab('pending_verification');
         }}
         onSelectCriticalTriage={() => {
           setSelectedRequest(null);
