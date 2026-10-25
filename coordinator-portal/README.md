@@ -1,36 +1,34 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ResQGrid — Emergency Coordinator Command Center
 
-## Getting Started
+Tactical command, dispatch triage, inventory logistics, and IoT hydrological early warning console for authorized disaster response personnel.
 
-First, run the development server:
+## 🚀 Quick Start
 
 ```bash
+# 1. Install dependencies
+npm install
+
+# 2. Configure environment (see .env.example)
+# Requires DATABASE_URL (Neon PostgreSQL) and GEMINI_API_KEY (Google Gemini)
+
+# 3. Push database schema & seed initial benchmark data
+npx prisma db push
+node scripts/sync-neon-db.mjs
+
+# 4. Start development server on Port 3000
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Visit: **`http://localhost:3000`**
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 📌 Capabilities
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- **Interactive Tactical Map:** Humanitarian OpenStreetMap (HOT) cartography, Mithi River flood inundation corridor & evacuation buffer, live depot icons, and dynamic fleet routing.
+- **4-Tier Lifecycle Dispatch Queue:** Four operational queue views (Needs Attention, To Verify, Partially Allocated, Fully Allocated, Rejected) with left-aligned tabs and smooth transitions.
+- **Explainable 55/20/15/10 Prioritization Engine:** Transparent mathematical score breakdown inspector (Need Criticality, Vulnerability, Logarithmic Headcount, Anti-Starvation Waiting Time) with coordinator justification overrides.
+- **Stock-Aware Allocation Engine:** Atomic stock reservations preventing double-allocation and retaining unfulfilled deficits at Priority Rank #1.
+- **Depot Inventory & Replenishment (`/inventory`):** Dynamic safety buffers, slide-over supplier requisition drawer, verified delivery restock workflow, and auto-clearing demand-deficit banners.
+- **DisasterSense IoT Hub (`/sensors`):** Real-time telemetry ingestion from ESP32 edge sensors, bidirectional closed-loop actuator feedback (<10ms), and automated safe route rerouting via the BKC Elevated Bypass (+14m ASL).
+- **Append-Only Audit Ledger (`/audit`):** Immutable transaction ledger of all triage, allocation, override, and replenishment activities.
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+For full system specifications and the end-to-end demonstration narrative, see the [Root README](../README.md).
