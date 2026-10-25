@@ -14,6 +14,7 @@ import { ReliefRequest, ReliefDepot } from '@/lib/types';
 interface OperationsSummaryRibbonProps {
   requests: ReliefRequest[];
   depots: ReliefDepot[];
+  isLoading?: boolean;
   onSelectPendingVerification?: () => void;
   onSelectCriticalTriage?: () => void;
   onSelectActiveDemands?: () => void;
@@ -22,10 +23,46 @@ interface OperationsSummaryRibbonProps {
 export default function OperationsSummaryRibbon({
   requests,
   depots,
+  isLoading = false,
   onSelectPendingVerification,
   onSelectCriticalTriage,
   onSelectActiveDemands,
 }: OperationsSummaryRibbonProps) {
+  if (isLoading) {
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+        {[
+          { label: 'ACTIVE RELIEF DEMANDS', color: 'bg-blue-100 text-blue-600' },
+          { label: 'CRITICAL TRIAGE (≥85)', color: 'bg-rose-100 text-rose-600' },
+          { label: 'PENDING VERIFICATION', color: 'bg-amber-100 text-amber-600' },
+          { label: 'REGIONAL DEPOT STOCK', color: 'bg-emerald-100 text-emerald-600' },
+        ].map((card, i) => (
+          <div
+            key={i}
+            className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs flex flex-col justify-between h-[126px] animate-pulse"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                {card.label}
+              </span>
+              <span className={`w-8 h-8 rounded-xl flex items-center justify-center opacity-60 ${card.color}`} />
+            </div>
+
+            <div className="mt-2 flex items-baseline justify-between">
+              <div className="h-8 w-16 bg-slate-200/80 rounded-lg animate-pulse" />
+              <div className="h-5 w-24 bg-slate-100 rounded-full animate-pulse" />
+            </div>
+
+            <div className="mt-1 pt-1 border-t border-slate-100 flex items-center justify-between">
+              <div className="h-3 w-32 bg-slate-100 rounded animate-pulse" />
+              <div className="h-3 w-16 bg-slate-100 rounded animate-pulse" />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   // 1. ACTIVE REQUESTS: In-flight demands in triage, warehouse staging, or field transit
   // Explicitly excludes completed (delivered) and closed (rejected) demands
   const activeRequests = requests.filter(

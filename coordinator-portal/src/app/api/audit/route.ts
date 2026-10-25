@@ -25,7 +25,7 @@ function formatDbAuditLog(row: {
 
   return {
     id: row.id,
-    timestamp: row.timestamp.toLocaleTimeString() + ' UTC',
+    timestamp: row.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }),
     category,
     action: row.action,
     actor: row.actor,

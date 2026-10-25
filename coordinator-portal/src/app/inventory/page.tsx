@@ -78,9 +78,10 @@ function playSuccessChime() {
 }
 
 export default function CoordinatorInventoryPage() {
-  const [depots, setDepots] = useState<ReliefDepot[]>(INITIAL_DEPOTS);
-  const [replenishments, setReplenishments] = useState<ReplenishmentOrder[]>(INITIAL_REPLENISHMENT);
-  const [requests, setRequests] = useState<ReliefRequest[]>(INITIAL_REQUESTS);
+  const [depots, setDepots] = useState<ReliefDepot[]>([]);
+  const [replenishments, setReplenishments] = useState<ReplenishmentOrder[]>([]);
+  const [requests, setRequests] = useState<ReliefRequest[]>([]);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [showOrderDrawer, setShowOrderDrawer] = useState(false);
   const showOrderModal = showOrderDrawer;
   const setShowOrderModal = setShowOrderDrawer;
@@ -132,16 +133,20 @@ export default function CoordinatorInventoryPage() {
         fetch('/api/requests', { cache: 'no-store' }),
       ]);
 
+      let loadedDepotsCount = 0;
       if (depotsRes.ok) {
         const depotsData = await depotsRes.json();
         if (Array.isArray(depotsData) && depotsData.length > 0) {
+          loadedDepotsCount = depotsData.length;
           setDepots(depotsData);
         }
       }
 
+      let loadedRepCount = 0;
       if (repRes.ok) {
         const repData = await repRes.json();
         if (Array.isArray(repData)) {
+          loadedRepCount = repData.length;
           setReplenishments(repData);
         }
       }
@@ -153,11 +158,19 @@ export default function CoordinatorInventoryPage() {
         }
       }
 
+      // Safety fallback only if database returned empty
+      if (loadedDepotsCount === 0) setDepots(INITIAL_DEPOTS);
+      if (loadedRepCount === 0) setReplenishments(INITIAL_REPLENISHMENT);
+
       setIsLiveActive(true);
       setLastSyncTime(new Date());
     } catch (err) {
       console.warn('Failed to load inventory data:', err);
+      setDepots(INITIAL_DEPOTS);
+      setReplenishments(INITIAL_REPLENISHMENT);
+      setRequests(INITIAL_REQUESTS);
     } finally {
+      setIsInitialLoading(false);
       if (isManual) setIsSyncing(false);
     }
   }, []);
@@ -719,7 +732,7 @@ export default function CoordinatorInventoryPage() {
       </div>
 
       {/* Active Demand Deficit Banners (ONLY shown when citizen demand in active queue exceeds available stock AND no restock order placed yet) */}
-      {activeDeficits.length > 0 && (
+      {!isInitialLoading && activeDeficits.length > 0 && (
         <div className="space-y-2.5">
           {activeDeficits.map((deficit) => {
             const Icon = deficit.icon;
@@ -768,7 +781,7 @@ export default function CoordinatorInventoryPage() {
           <div className="flex items-center space-x-2">
             <Layers className="w-4 h-4 text-blue-600" />
             <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-              Total Combined Regional Stock ({depots.length} Active Depots)
+              Total Combined Regional Stock ({isInitialLoading ? '...' : depots.length} Active Depots)
             </h2>
           </div>
           <span className="text-[11px] text-slate-500 font-medium">
@@ -776,77 +789,98 @@ export default function CoordinatorInventoryPage() {
           </span>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-          {combinedInventory.map((item) => {
-            const Icon = item.icon;
-            return (
+        {isInitialLoading ? (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+            {RESOURCE_DEFS.map((item, idx) => (
               <div
-                key={item.key}
-                className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between"
+                key={idx}
+                className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs h-[126px] flex flex-col justify-between animate-pulse"
               >
-                <div>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2">
-                      <div className="w-7 h-7 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center">
-                        <Icon className={`w-3.5 h-3.5 ${item.color}`} />
-                      </div>
-                      <span className="text-xs font-bold text-slate-800">{item.label}</span>
-                    </div>
-                    <span
-                      className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase border ${
-                        item.isSystemLow
-                          ? 'bg-amber-50 text-amber-800 border-amber-200'
-                          : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      }`}
-                    >
-                      {item.isSystemLow ? 'Buffer Low' : 'Adequate'}
-                    </span>
-                  </div>
-
-                  <div className="mt-3 flex items-baseline">
-                    <span className="text-2xl font-black text-slate-900 tracking-tight font-mono">
-                      {item.totalAvailable.toLocaleString()}
-                    </span>
-                    <span className="text-slate-500 font-medium text-xs ml-1.5">{item.unit}</span>
-                  </div>
-                </div>
-
-                <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[10.5px]">
-                  <div className="text-slate-500 font-mono text-[10px]">
-                    {item.totalAllocated > 0 ? (
-                      <span className="text-blue-600 font-bold font-mono">
-                        {item.totalAllocated.toLocaleString()} {item.unit} reserved
-                      </span>
-                    ) : (
-                      <span className="text-slate-400 font-mono text-[10px]">0 reserved</span>
-                    )}
-                  </div>
+                <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2">
-                    {item.inTransitQty > 0 && (
-                      <span className="text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-mono text-[9.5px] font-bold flex items-center space-x-1 animate-pulse">
-                        <Truck className="w-2.5 h-2.5 text-amber-600" />
-                        <span>+{item.inTransitQty.toLocaleString()}</span>
+                    <div className="w-7 h-7 rounded-lg bg-slate-100 flex items-center justify-center" />
+                    <span className="text-xs font-bold text-slate-400">{item.label}</span>
+                  </div>
+                  <div className="h-4 w-14 bg-slate-100 rounded-full" />
+                </div>
+                <div className="h-7 w-20 bg-slate-200/80 rounded-lg mt-2" />
+                <div className="h-3 w-28 bg-slate-100 rounded pt-2 border-t border-slate-100" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+            {combinedInventory.map((item) => {
+              const Icon = item.icon;
+              return (
+                <div
+                  key={item.key}
+                  className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <div className="w-7 h-7 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center">
+                          <Icon className={`w-3.5 h-3.5 ${item.color}`} />
+                        </div>
+                        <span className="text-xs font-bold text-slate-800">{item.label}</span>
+                      </div>
+                      <span
+                        className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase border ${
+                          item.isSystemLow
+                            ? 'bg-amber-50 text-amber-800 border-amber-200'
+                            : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        }`}
+                      >
+                        {item.isSystemLow ? 'Buffer Low' : 'Adequate'}
                       </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const lowestDepot = [...depots].sort(
-                          (a, b) => (a.inventory[item.key]?.availableStock ?? 0) - (b.inventory[item.key]?.availableStock ?? 0)
-                        )[0];
-                        handleOpenRestock(lowestDepot ? lowestDepot.id : 'DEPOT-ALPHA', item.key);
-                      }}
-                      className="px-2 py-0.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold rounded text-[10px] border border-blue-200 flex items-center space-x-0.5 transition-colors cursor-pointer"
-                    >
-                      <Plus className="w-3 h-3" />
-                      <span>Restock</span>
-                    </button>
+                    </div>
+
+                    <div className="mt-3 flex items-baseline">
+                      <span className="text-2xl font-black text-slate-900 tracking-tight font-mono">
+                        {item.totalAvailable.toLocaleString()}
+                      </span>
+                      <span className="text-slate-500 font-medium text-xs ml-1.5">{item.unit}</span>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[10.5px]">
+                    <div className="text-slate-500 font-mono text-[10px]">
+                      {item.totalAllocated > 0 ? (
+                        <span className="text-blue-600 font-bold font-mono">
+                          {item.totalAllocated.toLocaleString()} {item.unit} reserved
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 font-mono text-[10px]">0 reserved</span>
+                      )}
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      {item.inTransitQty > 0 && (
+                        <span className="text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded font-mono text-[9.5px] font-bold flex items-center space-x-1 animate-pulse">
+                          <Truck className="w-2.5 h-2.5 text-amber-600" />
+                          <span>+{item.inTransitQty.toLocaleString()}</span>
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const lowestDepot = [...depots].sort(
+                            (a, b) => (a.inventory[item.key]?.availableStock ?? 0) - (b.inventory[item.key]?.availableStock ?? 0)
+                          )[0];
+                          handleOpenRestock(lowestDepot ? lowestDepot.id : 'DEPOT-ALPHA', item.key);
+                        }}
+                        className="px-2 py-0.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold rounded text-[10px] border border-blue-200 flex items-center space-x-0.5 transition-colors cursor-pointer"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>Restock</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Depots Inventory Matrix Header */}
@@ -861,7 +895,35 @@ export default function CoordinatorInventoryPage() {
 
       {/* Depots Inventory Matrix */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {depots.map((depot) => (
+        {isInitialLoading ? (
+          [1, 2, 3].map((i) => (
+            <div
+              key={i}
+              className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs space-y-4 animate-pulse min-h-[340px]"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                <div className="space-y-1.5">
+                  <div className="h-4 w-20 bg-slate-200/80 rounded" />
+                  <div className="h-5 w-32 bg-slate-200/80 rounded" />
+                  <div className="h-3 w-24 bg-slate-100 rounded" />
+                </div>
+                <div className="h-5 w-20 bg-slate-100 rounded-full" />
+              </div>
+              <div className="space-y-3">
+                {[1, 2, 3, 4].map((j) => (
+                  <div key={j} className="p-2.5 bg-slate-50/70 rounded-xl space-y-2">
+                    <div className="flex justify-between">
+                      <div className="h-3 w-16 bg-slate-200/80 rounded" />
+                      <div className="h-3 w-20 bg-slate-200/80 rounded" />
+                    </div>
+                    <div className="h-2 w-full bg-slate-200/80 rounded-full" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))
+        ) : (
+          depots.map((depot) => (
           <div key={depot.id} className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs space-y-3 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between pb-3 border-b border-slate-100">
@@ -971,7 +1033,8 @@ export default function CoordinatorInventoryPage() {
               </div>
             </div>
           </div>
-        ))}
+        ))
+      )}
       </div>
 
       {/* Active Replenishments & Supplier Shipments */}
@@ -989,7 +1052,26 @@ export default function CoordinatorInventoryPage() {
         </div>
 
         <div className="space-y-3">
-          {replenishments.length === 0 ? (
+          {isInitialLoading ? (
+            <div className="space-y-3">
+              {[1, 2].map((i) => (
+                <div
+                  key={i}
+                  className="bg-slate-50/80 border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-pulse"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-center space-x-2">
+                      <div className="h-5 w-16 bg-slate-200 rounded" />
+                      <div className="h-5 w-36 bg-slate-200 rounded" />
+                      <div className="h-4 w-16 bg-slate-100 rounded-full" />
+                    </div>
+                    <div className="h-3 w-56 bg-slate-200/70 rounded" />
+                  </div>
+                  <div className="h-8 w-28 bg-slate-200/80 rounded-xl" />
+                </div>
+              ))}
+            </div>
+          ) : replenishments.length === 0 ? (
             <div className="p-6 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
               No active replenishment orders. Click "Issue Replenishment Order" to requisition stock.
             </div>
@@ -1132,7 +1214,23 @@ export default function CoordinatorInventoryPage() {
             </div>
 
             <div className="space-y-2">
-              {displayedDemands.length === 0 ? (
+              {isInitialLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div
+                      key={i}
+                      className="bg-slate-50/80 border border-slate-200/90 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-pulse"
+                    >
+                      <div className="flex items-center space-x-2.5">
+                        <div className="h-5 w-16 bg-slate-200 rounded" />
+                        <div className="h-5 w-24 bg-slate-200 rounded" />
+                        <div className="h-4 w-32 bg-slate-100 rounded" />
+                      </div>
+                      <div className="h-6 w-28 bg-slate-200 rounded-lg" />
+                    </div>
+                  ))}
+                </div>
+              ) : displayedDemands.length === 0 ? (
                 <div className="p-6 text-center text-xs text-slate-400">
                   {demandFilterTab === 'active'
                     ? 'No active in-flight demands currently reserving depot stock. All demands are fulfilled!'

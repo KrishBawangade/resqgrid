@@ -30,6 +30,7 @@ interface PrioritizedQueueTableProps {
   requests: ReliefRequest[];
   selectedRequestId: string | null;
   activeTab: QueueTabType;
+  isLoading?: boolean;
   onTabChange: (tab: QueueTabType) => void;
   onSelectRequest: (req: ReliefRequest) => void;
   onVerify: (id: string) => void;
@@ -44,6 +45,7 @@ export default function PrioritizedQueueTable({
   requests,
   selectedRequestId,
   activeTab,
+  isLoading = false,
   onTabChange,
   onSelectRequest,
   onVerify,
@@ -295,15 +297,41 @@ export default function PrioritizedQueueTable({
 
       {/* Cards List (Scrollable) */}
       <div className="flex-1 overflow-y-auto pr-1">
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.div
-            key={activeTab + (filterResource ? `_${filterResource}` : '')}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.15 }}
-            className="space-y-2.5 pb-2 min-h-full flex flex-col"
-          >
+        {isLoading ? (
+          <div className="space-y-2.5 pb-2">
+            {[1, 2, 3, 4].map((i) => (
+              <div
+                key={i}
+                className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs animate-pulse space-y-3"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <div className="h-5 w-20 bg-slate-200/80 rounded" />
+                    <div className="h-5 w-16 bg-slate-100 rounded-full" />
+                  </div>
+                  <div className="h-6 w-14 bg-slate-200/80 rounded-lg" />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="h-3.5 w-3/4 bg-slate-200/70 rounded" />
+                  <div className="h-3 w-1/2 bg-slate-100 rounded" />
+                </div>
+                <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                  <div className="h-3 w-32 bg-slate-100 rounded" />
+                  <div className="h-7 w-20 bg-slate-200/80 rounded-lg" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={activeTab + (filterResource ? `_${filterResource}` : '')}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="space-y-2.5 pb-2 min-h-full flex flex-col"
+            >
             {filtered.length === 0 ? (
               <div className="flex-1 min-h-[260px] flex flex-col items-center justify-center text-center p-6 space-y-2 bg-slate-50/60 rounded-xl border border-dashed border-slate-200">
             {activeTab === 'pending_verification' && (
@@ -711,7 +739,8 @@ export default function PrioritizedQueueTable({
             }))}
           </motion.div>
         </AnimatePresence>
-      </div>
+      )}
+    </div>
 
       {/* Reject Request Modal */}
       {rejectModalReq && (

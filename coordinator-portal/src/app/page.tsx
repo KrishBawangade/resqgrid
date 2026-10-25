@@ -56,9 +56,10 @@ function playAlertChime() {
 }
 
 export default function CoordinatorOperationsPage() {
-  const [requests, setRequests] = useState<ReliefRequest[]>(INITIAL_REQUESTS);
-  const [depots, setDepots] = useState<ReliefDepot[]>(INITIAL_DEPOTS);
-  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(INITIAL_AUDIT_LOGS);
+  const [requests, setRequests] = useState<ReliefRequest[]>([]);
+  const [depots, setDepots] = useState<ReliefDepot[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [selectedRequest, setSelectedRequest] = useState<ReliefRequest | null>(null);
   const [queueTab, setQueueTab] = useState<QueueTabType>('needs_attention');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -67,7 +68,7 @@ export default function CoordinatorOperationsPage() {
   const [isRefreshingManually, setIsRefreshingManually] = useState(false);
 
   const initialLoadDoneRef = React.useRef(false);
-  const knownRequestIdsRef = React.useRef<Set<string>>(new Set(INITIAL_REQUESTS.map((r) => r.id)));
+  const knownRequestIdsRef = React.useRef<Set<string>>(new Set());
   const isFetchingRef = React.useRef(false);
   const activeRouteRef = React.useRef<string>('PRIMARY_LBS_CORRIDOR');
 
@@ -89,6 +90,7 @@ export default function CoordinatorOperationsPage() {
         fetch('/api/audit', { cache: 'no-store' }),
       ]);
 
+      let loadedRequestsCount = 0;
       if (reqRes.ok) {
         const data: ReliefRequest[] = await reqRes.json();
         if (Array.isArray(data)) {
@@ -98,14 +100,17 @@ export default function CoordinatorOperationsPage() {
             seen.add(r.id);
             return true;
           });
+          loadedRequestsCount = unique.length;
           setRequests(unique);
           unique.forEach((r) => knownRequestIdsRef.current.add(r.id));
         }
       }
 
+      let loadedDepotsCount = 0;
       if (depotsRes.ok) {
         const data: ReliefDepot[] = await depotsRes.json();
         if (Array.isArray(data) && data.length > 0) {
+          loadedDepotsCount = data.length;
           setDepots(data);
         }
       }
@@ -117,12 +122,27 @@ export default function CoordinatorOperationsPage() {
         }
       }
 
+      // Safety fallback to initial benchmarks only if database returned zero records on first load
+      if (loadedRequestsCount === 0 && !initialLoadDoneRef.current) {
+        setRequests(INITIAL_REQUESTS);
+      }
+      if (loadedDepotsCount === 0 && !initialLoadDoneRef.current) {
+        setDepots(INITIAL_DEPOTS);
+      }
+
       setIsLiveActive(true);
       setLastSyncTime(new Date());
     } catch (e) {
       console.warn('Initial data load error:', e);
+      if (!initialLoadDoneRef.current) {
+        setRequests(INITIAL_REQUESTS);
+        setDepots(INITIAL_DEPOTS);
+        setAuditLogs(INITIAL_AUDIT_LOGS);
+      }
     } finally {
       isFetchingRef.current = false;
+      initialLoadDoneRef.current = true;
+      setIsInitialLoading(false);
       if (isManual) setIsRefreshingManually(false);
     }
   }, []);
@@ -294,7 +314,7 @@ export default function CoordinatorOperationsPage() {
     }
     const log: AuditLogEntry = {
       id: `AUD-${Math.floor(800 + Math.random() * 200)}`,
-      timestamp: new Date().toLocaleTimeString() + ' UTC',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }),
       category: 'VERIFICATION',
       action: 'REQUEST_VERIFIED',
       actor: 'Coordinator Vance',
@@ -344,7 +364,7 @@ export default function CoordinatorOperationsPage() {
 
     const log: AuditLogEntry = {
       id: `AUD-${Math.floor(800 + Math.random() * 200)}`,
-      timestamp: new Date().toLocaleTimeString() + ' UTC',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }),
       category: 'ALLOCATION',
       action: result.isPartial ? 'PARTIAL_STOCK_ALLOCATION' : 'FULL_STOCK_ALLOCATION',
       actor: 'Stock Allocation Engine',
@@ -427,7 +447,7 @@ export default function CoordinatorOperationsPage() {
 
     const log: AuditLogEntry = {
       id: `AUD-${Math.floor(800 + Math.random() * 200)}`,
-      timestamp: new Date().toLocaleTimeString() + ' UTC',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }),
       category: 'ALLOCATION',
       action: 'RELIEF_DISPATCHED',
       actor: 'Chief Coordinator Vance',
@@ -511,7 +531,7 @@ export default function CoordinatorOperationsPage() {
 
     const log: AuditLogEntry = {
       id: `AUD-${Math.floor(800 + Math.random() * 200)}`,
-      timestamp: new Date().toLocaleTimeString() + ' UTC',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }),
       category: 'ALLOCATION',
       action: 'DELIVERY_FULFILLED',
       actor: 'Field Operations Crew',
@@ -598,7 +618,7 @@ export default function CoordinatorOperationsPage() {
 
     const log: AuditLogEntry = {
       id: `AUD-${Math.floor(800 + Math.random() * 200)}`,
-      timestamp: new Date().toLocaleTimeString() + ' UTC',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }),
       category: 'OVERRIDE',
       action: 'PRIORITY_OVERRIDE_APPROVED',
       actor: 'Chief Coordinator Vance',
@@ -636,7 +656,7 @@ export default function CoordinatorOperationsPage() {
               verificationStatus: 'rejected',
               requestStatus: 'rejected',
               rejectionReason: reason,
-              rejectedAt: new Date().toLocaleTimeString() + ' UTC',
+              rejectedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }),
               stageTimestamps: updatedTimestamps,
             }
           : r
@@ -650,7 +670,7 @@ export default function CoordinatorOperationsPage() {
               verificationStatus: 'rejected',
               requestStatus: 'rejected',
               rejectionReason: reason,
-              rejectedAt: new Date().toLocaleTimeString() + ' UTC',
+              rejectedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }),
               stageTimestamps: updatedTimestamps,
             }
           : null
@@ -658,7 +678,7 @@ export default function CoordinatorOperationsPage() {
     }
     const log: AuditLogEntry = {
       id: `AUD-${Math.floor(800 + Math.random() * 200)}`,
-      timestamp: new Date().toLocaleTimeString() + ' UTC',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }),
       category: 'VERIFICATION',
       action: 'REQUEST_REJECTED',
       actor: 'Coordinator Vance',
@@ -826,6 +846,7 @@ export default function CoordinatorOperationsPage() {
       <OperationsSummaryRibbon
         requests={requests}
         depots={depots}
+        isLoading={isInitialLoading}
         onSelectPendingVerification={() => {
           setSelectedRequest(null);
           setQueueTab('pending_verification');
@@ -862,6 +883,7 @@ export default function CoordinatorOperationsPage() {
                 requests={requests}
                 selectedRequestId={null}
                 activeTab={queueTab}
+                isLoading={isInitialLoading}
                 onTabChange={setQueueTab}
                 onSelectRequest={(req) => setSelectedRequest(req)}
                 onVerify={handleVerify}

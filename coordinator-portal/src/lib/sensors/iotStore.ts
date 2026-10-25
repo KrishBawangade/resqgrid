@@ -174,6 +174,11 @@ export function processTelemetryReading(raw: {
   if (dataSource === 'HARDWARE_LIVE') {
     iotStore.lastHardwarePacketAt = timestamp;
     iotStore.activeScenarioName = 'LIVE_HARDWARE';
+    // When real live hardware data arrives, remove pre-seeded simulation readings
+    // so we maintain and display only current physical readings
+    if (iotStore.history.some(h => h.data_source === 'SIMULATION')) {
+      iotStore.history = iotStore.history.filter(h => h.data_source === 'HARDWARE_LIVE');
+    }
   }
 
   // Update history buffer (keep up to 100 readings)
