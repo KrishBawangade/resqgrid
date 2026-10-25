@@ -287,6 +287,45 @@ This living document logs all major architectural decisions (ADRs), milestone pr
 
 ---
 
+### ADR-016: Dedicated Verification Intake Queue, Left-Aligned Segmented Tabs & Elimination of Tab Transition Jank
+- **Date:** 2026-10-25
+- **Status:** Accepted
+- **Context:**
+  1. **Verification Backlog Visibility:**
+     - Coordinators required a direct intake filter to view and verify unauthenticated citizen demands without having to manually sift through the entire attention list.
+     - At the same time, high-priority unverified demands could not be hidden from the primary Attention tab, as urgent medical or flood rescues must remain prominent for immediate emergency triage.
+  2. **Tab Segmented Control Ergonomics & Alignment:**
+     - When tabs wrapped onto multiple rows, orphaned buttons (e.g. "Rejected") were floating or centered inconsistently instead of resting flush against the left margin.
+     - Active and inactive tab buttons used asymmetric border widths (1px border on inactive vs. 2px border on active) paired with `transition-all`. Clicking any tab expanded the button dimensions by 2px, pushing neighboring buttons and causing noticeable visual jitter.
+  3. **Tab-Switching Animation Jank & FLIP Spring Conflict:**
+     - In `PrioritizedQueueTable.tsx`, each individual demand card was wrapped in `<motion.div layout transition={{ type: 'spring', damping: 25, stiffness: 250 }} className="... transition-all ...">`.
+     - When switching tabs, Framer Motion performed per-card FLIP calculations across the mounting and unmounting elements simultaneously, while CSS `transition-all` fought the inline style transforms. This resulted in cards bouncing violently, jumping heights, and causing severe frame stutter.
+  4. **Toast Notification Motion Polish:**
+     - Notifications previously relied on Tailwind's infinite CSS `animate-bounce`, which felt unrefined and distracting.
+- **Decision:**
+  1. **Dedicated "To Verify" Queue with Inclusive Attention Tab:**
+     - Added `pending_verification` to `QueueTabType` in `types.ts` and `PrioritizedQueueTable.tsx`.
+     - `needsAttentionList`: Retains ALL active unallocated requests (both verified and unverified) so life-critical emergencies never get hidden.
+     - `pendingVerificationList`: Strictly isolates unverified requests (`verificationStatus === 'pending' || verificationStatus === 'flagged'`).
+     - Added dynamic action buttons inside cards: unverified demands present a violet "Verify" button and a "Reject" button; verified demands present a blue "Allocate" button.
+     - Wired `OperationsSummaryRibbon` "Awaiting Verification" counter directly to activate the `pending_verification` tab on click.
+  2. **Standardized Border-2 and Left-Aligned Wrapped Tabs:**
+     - Container updated to `flex flex-wrap items-center justify-start gap-1.5`, ensuring any wrapped buttons sit flush against the extreme left margin.
+     - Standardized all tab buttons to consistent `border-2` (both active and inactive) and replaced `transition-all` with `transition-colors duration-150`, guaranteeing zero layout shift or button size jumping when switching tabs.
+  3. **Simple Pure Fade Container Animation:**
+     - Replaced per-card layout springs and CSS `transition-all` with a clean, unified container transition:
+       `<AnimatePresence mode="wait" initial={false}>` with `<motion.div key={activeTab + ...} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>`.
+     - Rendered individual cards as lightweight, standard DOM elements with `transition-colors duration-150` for instantaneous, zero-latency hover and selection states.
+     - Resolved JSX syntax error on ternary map closing parentheses.
+  4. **Spring-Damped Toast Notifications:**
+     - Replaced raw CSS `animate-bounce` in `page.tsx` and `inventory/page.tsx` with smooth spring-damped entrance and exit transitions (`<motion.div>` with `stiffness: 350, damping: 28`).
+- **Rationale:**
+  1. Empowers coordinators to rapidly clear authentication backlogs without sacrificing situational awareness in the general attention queue.
+  2. Delivers a clean, professional command center interface with rock-solid alignment and zero layout shifting.
+  3. Completely eliminates animation jank, bouncing, and layout fighting, producing silky-smooth 60fps/120fps tab navigation.
+
+---
+
 ## Build Milestones & Phase Progress
 
 | Phase | Description | Status | Verification Checkpoint |
@@ -301,6 +340,7 @@ This living document logs all major architectural decisions (ADRs), milestone pr
 | **Phase 7** | Real-Time Cross-Portal SSE Streaming & Mumbai Operations Standardization | **Completed** | Server-Sent Events stream live; instant cross-portal updates verified with zero polling; dynamic top nav shortage badge |
 | **Phase 8** | End-to-End Demo Scenario Controller & Verification | **Completed** | One-click benchmark scenario reset (`/api/scenario/reset`), full theater map auto-framing, multi-resource allocation, and real-time SSE sync |
 | **Phase 9** | Multi-Resource Allocations, Real-Time Stage Timestamps & Tracker Precision | **Completed** | Full multi-resource benchmarks (`REQ-1048`, `REQ-1033`), Neon DB stage timestamp persistence, ADR-007 partial fulfillment banner, and gap-only stepper connectors |
+| **Phase 10** | Dedicated Verification Queue, Left-Aligned Tab Ergonomics & Smooth Tab Motion | **Completed** | Dedicated `pending_verification` tab, left-aligned wrap layout, zero-jank pure fade transitions, and spring toast notifications |
 
 
 
