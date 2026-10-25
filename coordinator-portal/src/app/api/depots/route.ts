@@ -146,6 +146,42 @@ export async function getFormattedDepots(): Promise<ReliefDepot[]> {
     return reloaded.map(formatDbDepot);
   }
 
+  // Reconcile DEPOT-ALPHA medical_supplies if initial scenario REQ-1039 is active and unfulfilled
+  const alphaStock = await db.depotStock.findUnique({
+    where: {
+      depotId_resourceType: {
+        depotId: 'DEPOT-ALPHA',
+        resourceType: 'medical_supplies',
+      },
+    },
+  });
+
+  if (alphaStock && alphaStock.allocatedStock === 0) {
+    const req1039 = await db.reliefRequest.findUnique({
+      where: { id: 'REQ-1039' },
+    });
+    // If REQ-1039 is still active/dispatched (not delivered or rejected)
+    if (!req1039 || (req1039.requestStatus !== 'delivered' && req1039.requestStatus !== 'rejected')) {
+      await db.depotStock.update({
+        where: {
+          depotId_resourceType: {
+            depotId: 'DEPOT-ALPHA',
+            resourceType: 'medical_supplies',
+          },
+        },
+        data: {
+          availableStock: 45,
+          allocatedStock: 45,
+        },
+      });
+      const reloaded = await db.reliefDepot.findMany({
+        include: { stocks: true },
+        orderBy: { id: 'asc' },
+      });
+      return reloaded.map(formatDbDepot);
+    }
+  }
+
   return rows.map(formatDbDepot);
 }
 

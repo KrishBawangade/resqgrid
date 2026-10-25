@@ -36,6 +36,7 @@ interface PrioritizedQueueTableProps {
   onReject: (id: string, reason: string) => void;
   onRestore: (id: string) => void;
   onDispatch?: (id: string) => void;
+  onDeliver?: (id: string) => void;
 }
 
 export default function PrioritizedQueueTable({
@@ -48,6 +49,7 @@ export default function PrioritizedQueueTable({
   onReject,
   onRestore,
   onDispatch,
+  onDeliver,
 }: PrioritizedQueueTableProps) {
   const [filterResource, setFilterResource] = useState<string>('all');
 
@@ -55,19 +57,47 @@ export default function PrioritizedQueueTable({
   const [rejectModalReq, setRejectModalReq] = useState<ReliefRequest | null>(null);
   const [rejectionReasonInput, setRejectionReasonInput] = useState('');
 
-  // Tab categorization
+  const getReqAllocated = (r: ReliefRequest) =>
+    r.requestedResources && r.requestedResources.length > 0
+      ? r.requestedResources.reduce((acc, item) => acc + item.allocatedQty, 0)
+      : r.allocatedQty;
+
+  const getReqUnfulfilled = (r: ReliefRequest) =>
+    r.requestedResources && r.requestedResources.length > 0
+      ? r.requestedResources.reduce((acc, item) => acc + item.unfulfilledQty, 0)
+      : r.unfulfilledQty;
+
+  // Strict, mutually-exclusive tab categorization by lifecycle state
+  const isReqFulfilled = (r: ReliefRequest) =>
+    r.requestStatus === 'delivered' ||
+    r.requestStatus === 'dispatched' ||
+    r.requestStatus === 'fully_allocated' ||
+    (getReqUnfulfilled(r) === 0 && getReqAllocated(r) > 0);
+
+  const isReqPartial = (r: ReliefRequest) =>
+    !isReqFulfilled(r) &&
+    (r.requestStatus === 'partially_allocated' || (getReqAllocated(r) > 0 && getReqUnfulfilled(r) > 0));
+
+  const isReqRejected = (r: ReliefRequest) =>
+    r.requestStatus === 'rejected' || r.verificationStatus === 'rejected';
+
+  // 1. Needs Attention = Unallocated active requests that are NOT fulfilled, NOT partial, and NOT rejected
   const needsAttentionList = requests.filter(
-    (r) => r.requestStatus !== 'rejected' && r.allocatedQty === 0 && r.unfulfilledQty > 0
+    (r) => !isReqRejected(r) && !isReqFulfilled(r) && !isReqPartial(r)
   );
+
+  // 2. Partially Allocated = Demands with partial stock assigned but remaining deficit
   const partiallyAllocatedList = requests.filter(
-    (r) => r.requestStatus !== 'rejected' && r.allocatedQty > 0 && r.unfulfilledQty > 0
+    (r) => !isReqRejected(r) && isReqPartial(r)
   );
+
+  // 3. Fully Allocated / Fulfilled = 100% stock reserved, in transit, or delivered
   const fullyAllocatedList = requests.filter(
-    (r) => r.requestStatus !== 'rejected' && (r.unfulfilledQty === 0 || r.requestStatus === 'fully_allocated')
+    (r) => !isReqRejected(r) && isReqFulfilled(r)
   );
-  const rejectedList = requests.filter(
-    (r) => r.requestStatus === 'rejected' || r.verificationStatus === 'rejected'
-  );
+
+  // 4. Rejected Demands
+  const rejectedList = requests.filter((r) => isReqRejected(r));
 
   // Current tab items
   const currentTabItems = 
@@ -81,8 +111,12 @@ export default function PrioritizedQueueTable({
 
   const filtered = currentTabItems
     .filter((r) => {
-      if (filterResource !== 'all' && r.resourceType !== filterResource) return false;
-      return true;
+      if (filterResource === 'all') return true;
+      if (r.resourceType === filterResource) return true;
+      if (r.requestedResources && r.requestedResources.some((item) => item.resourceType === filterResource)) {
+        return true;
+      }
+      return false;
     })
     .sort((a, b) => b.priorityScore - a.priorityScore);
 
@@ -284,6 +318,15 @@ export default function PrioritizedQueueTable({
               const isPending = req.verificationStatus === 'pending';
               const isRejected = req.requestStatus === 'rejected';
 
+              const hasMultiResources = Boolean(req.requestedResources && req.requestedResources.length > 1);
+              const totalRequested = (req.requestedResources && req.requestedResources.length > 0)
+                ? req.requestedResources.reduce((acc, r) => acc + r.requestedQty, 0)
+                : req.requestedQty;
+              const totalAllocated = (req.requestedResources && req.requestedResources.length > 0)
+                ? req.requestedResources.reduce((acc, r) => acc + r.allocatedQty, 0)
+                : req.allocatedQty;
+              const totalUnfulfilled = Math.max(0, totalRequested - totalAllocated);
+
               return (
                 <motion.div
                   key={req.id}
@@ -307,10 +350,20 @@ export default function PrioritizedQueueTable({
                       <span className="font-mono text-xs font-bold text-slate-400">
                         #{idx + 1}
                       </span>
-                      <div className="flex items-center space-x-1.5 font-bold text-slate-900">
-                        {getResourceIcon(req.resourceType)}
-                        <span className="capitalize">{req.resourceType.replace(/_/g, ' ')}</span>
-                      </div>
+                      {hasMultiResources ? (
+                        <div className="flex items-center space-x-1.5 font-bold text-slate-900">
+                          <Boxes className="w-4 h-4 text-blue-600 flex-shrink-0" />
+                          <span>Multi-Resource Demand</span>
+                          <span className="text-[10px] font-bold bg-blue-100 text-blue-800 px-1.5 py-0.2 rounded-full border border-blue-200">
+                            {req.requestedResources!.length} Items
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center space-x-1.5 font-bold text-slate-900">
+                          {getResourceIcon(req.resourceType)}
+                          <span className="capitalize">{req.resourceType.replace(/_/g, ' ')}</span>
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex items-center space-x-2">
@@ -356,17 +409,17 @@ export default function PrioritizedQueueTable({
                       ) : req.requestStatus === 'delivered' ? (
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center space-x-1">
                           <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                          <span>Delivered</span>
+                          <span>Stage 3: Fulfilled</span>
                         </span>
                       ) : req.requestStatus === 'dispatched' ? (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-50 text-sky-800 border border-sky-200 flex items-center space-x-1">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-50 text-sky-800 border border-sky-200 flex items-center space-x-1 animate-pulse">
                           <Truck className="w-3 h-3 text-sky-600" />
-                          <span>Dispatched</span>
+                          <span>Stage 2: In Transit</span>
                         </span>
                       ) : (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center space-x-1">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                          <span>100% Reserved</span>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-800 border border-blue-200 flex items-center space-x-1">
+                          <Boxes className="w-3 h-3 text-blue-600" />
+                          <span>Stage 1: Staged</span>
                         </span>
                       )}
                     </div>
@@ -395,16 +448,51 @@ export default function PrioritizedQueueTable({
                     </div>
                   </div>
 
+                  {/* Multi-Resource Badges */}
+                  {hasMultiResources && (
+                    <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                      {req.requestedResources!.map((item) => {
+                        const isItemFulfilled = item.unfulfilledQty === 0;
+                        const isItemPartial = item.allocatedQty > 0 && item.unfulfilledQty > 0;
+                        return (
+                          <span
+                            key={item.resourceType}
+                            className={`inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-md text-[10.5px] font-semibold border ${
+                              isItemFulfilled
+                                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                : isItemPartial
+                                ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                : 'bg-slate-50 text-slate-700 border-slate-200'
+                            }`}
+                          >
+                            {getResourceIcon(item.resourceType)}
+                            <span className="font-bold text-slate-800">
+                              {item.resourceType === 'drinking_water' ? 'Water' : item.resourceType === 'medical_supplies' ? 'Medical' : item.resourceType === 'food_rations' ? 'Food' : 'Shelter'}
+                            </span>
+                            <span className="font-mono text-slate-600 font-normal">
+                              {item.allocatedQty}/{item.requestedQty}{item.resourceType === 'drinking_water' ? 'L' : ''}
+                            </span>
+                            {isItemFulfilled ? (
+                              <span className="text-emerald-600 font-bold">✓</span>
+                            ) : isItemPartial ? (
+                              <span className="text-amber-600 font-bold text-[9.5px]">({item.unfulfilledQty} deficit)</span>
+                            ) : null}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   {/* Stock Allocation Progress Bar (hidden for rejected) */}
                   {!isRejected && (
                     <div className="space-y-1 pt-1 border-t border-slate-100">
                       <div className="flex justify-between items-center text-[11px]">
                         <span className="font-mono text-slate-700 font-semibold">
-                          {req.allocatedQty} / {req.requestedQty} Units
+                          {totalAllocated} / {totalRequested} {hasMultiResources ? 'Total Units' : 'Units'}
                         </span>
-                        {req.unfulfilledQty > 0 ? (
+                        {totalUnfulfilled > 0 ? (
                           <span className="text-[10px] text-amber-700 font-bold bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200">
-                            {req.unfulfilledQty} unmet deficit
+                            {totalUnfulfilled} unmet deficit
                           </span>
                         ) : (
                           <span className="text-[10px] text-emerald-700 font-semibold bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
@@ -415,11 +503,11 @@ export default function PrioritizedQueueTable({
 
                       <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden flex border border-slate-200/50">
                         <div
-                          style={{ width: `${(req.allocatedQty / req.requestedQty) * 100}%` }}
+                          style={{ width: `${totalRequested > 0 ? (totalAllocated / totalRequested) * 100 : 0}%` }}
                           className="bg-emerald-500 h-full transition-all"
                         />
                         <div
-                          style={{ width: `${(req.unfulfilledQty / req.requestedQty) * 100}%` }}
+                          style={{ width: `${totalRequested > 0 ? (totalUnfulfilled / totalRequested) * 100 : 0}%` }}
                           className="bg-amber-400/80 h-full transition-all"
                         />
                       </div>
@@ -479,22 +567,37 @@ export default function PrioritizedQueueTable({
                         </>
                       ) : activeTab === 'fully_allocated' ? (
                         req.requestStatus === 'delivered' ? (
-                          <span className="text-emerald-700 font-semibold flex items-center space-x-1 text-[10.5px]">
+                          <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg font-bold flex items-center space-x-1 text-[10.5px]">
                             <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                            <span>Delivered</span>
+                            <span>100% Fulfilled</span>
                           </span>
                         ) : req.requestStatus === 'dispatched' ? (
-                          <span className="text-sky-700 font-semibold flex items-center space-x-1 text-[10.5px]">
-                            <Truck className="w-3 h-3 text-sky-600" />
-                            <span>En Route</span>
-                          </span>
+                          onDeliver ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDeliver(req.id);
+                              }}
+                              className="text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-lg text-[10.5px] font-bold flex items-center space-x-1 border border-emerald-300 transition-all shadow-2xs hover:shadow-xs cursor-pointer"
+                              title="Confirm citizen handover & 100% fulfill demand"
+                            >
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              <span>Confirm Delivery</span>
+                            </button>
+                          ) : (
+                            <span className="text-sky-700 font-semibold flex items-center space-x-1 text-[10.5px]">
+                              <Truck className="w-3 h-3 text-sky-600" />
+                              <span>En Route</span>
+                            </span>
+                          )
                         ) : onDispatch ? (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               onDispatch(req.id);
                             }}
-                            className="text-sky-700 bg-sky-50 hover:bg-sky-100 px-2 py-0.5 rounded text-[10.5px] font-bold flex items-center space-x-1 border border-sky-200 transition-colors"
+                            className="text-sky-700 bg-sky-50 hover:bg-sky-100 px-2.5 py-1 rounded-lg text-[10.5px] font-bold flex items-center space-x-1 border border-sky-200 transition-all shadow-2xs hover:shadow-xs cursor-pointer"
+                            title="Dispatch relief cargo into transit corridor"
                           >
                             <Truck className="w-3 h-3 text-sky-600" />
                             <span>Dispatch</span>

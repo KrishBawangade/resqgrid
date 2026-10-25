@@ -23,7 +23,11 @@ import {
   Ban,
   XCircle,
   RotateCcw,
-  Truck
+  Truck,
+  Droplets,
+  HeartPulse,
+  Utensils,
+  Tent
 } from 'lucide-react';
 
 interface ScoreInspectorDrawerProps {
@@ -69,6 +73,22 @@ export default function ScoreInspectorDrawer({
   const isCritical = request.priorityScore >= 85;
   const isHigh = request.priorityScore >= 70 && request.priorityScore < 85;
   const b = request.scoreBreakdown;
+  const hasMultiResources = (request.requestedResources?.length ?? 0) > 1;
+
+  const getResourceIcon = (type: string) => {
+    switch (type) {
+      case 'drinking_water':
+        return <Droplets className="w-3.5 h-3.5 text-blue-600" />;
+      case 'medical_supplies':
+        return <HeartPulse className="w-3.5 h-3.5 text-rose-600" />;
+      case 'food_rations':
+        return <Utensils className="w-3.5 h-3.5 text-amber-600" />;
+      case 'shelter_kits':
+        return <Tent className="w-3.5 h-3.5 text-purple-600" />;
+      default:
+        return <Boxes className="w-3.5 h-3.5 text-blue-600" />;
+    }
+  };
 
   // Sorted list for Prev / Next navigation
   const sortedRequests = [...requests].sort((a, b) => b.priorityScore - a.priorityScore);
@@ -198,9 +218,19 @@ export default function ScoreInspectorDrawer({
             )}
           </div>
 
-          <h2 className="text-base font-bold text-slate-900 capitalize pt-1">
-            {request.resourceType.replace(/_/g, ' ')} Demand
-          </h2>
+          {hasMultiResources ? (
+            <h2 className="text-base font-bold text-slate-900 capitalize pt-1 flex items-center space-x-2">
+              <Boxes className="w-4 h-4 text-blue-600 flex-shrink-0" />
+              <span>Multi-Resource Requisition</span>
+              <span className="text-[11px] font-bold bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full border border-blue-200">
+                {request.requestedResources!.length} Categories
+              </span>
+            </h2>
+          ) : (
+            <h2 className="text-base font-bold text-slate-900 capitalize pt-1">
+              {request.resourceType.replace(/_/g, ' ')} Demand
+            </h2>
+          )}
 
           <div className="flex items-center space-x-1.5 text-xs text-slate-500">
             <MapPin className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
@@ -370,23 +400,25 @@ export default function ScoreInspectorDrawer({
                 <span>Stock Fulfillment Status</span>
               </span>
               <span className="font-mono font-bold text-slate-900 text-sm">
-                {request.allocatedQty} / {request.requestedQty} Units
+                {request.allocatedQty} / {request.requestedQty} {hasMultiResources ? 'Total Units' : 'Units'}
               </span>
             </div>
 
             <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden flex border border-slate-200/60">
               <div
-                style={{ width: `${(request.allocatedQty / request.requestedQty) * 100}%` }}
+                style={{ width: `${request.requestedQty > 0 ? (request.allocatedQty / request.requestedQty) * 100 : 0}%` }}
                 className="bg-emerald-500 h-full transition-all"
               />
               <div
-                style={{ width: `${(request.unfulfilledQty / request.requestedQty) * 100}%` }}
+                style={{ width: `${request.requestedQty > 0 ? (request.unfulfilledQty / request.requestedQty) * 100 : 0}%` }}
                 className="bg-amber-400/80 h-full transition-all"
               />
             </div>
 
             <div className="flex justify-between text-[11px]">
-              <span className="text-emerald-700 font-semibold">Allocated: {request.allocatedQty} units</span>
+              <span className="text-emerald-700 font-semibold">
+                Allocated: {request.allocatedQty} {hasMultiResources ? 'Total Units' : 'units'}
+              </span>
               {request.unfulfilledQty > 0 ? (
                 <span className="text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
                   {request.unfulfilledQty} unmet deficit
@@ -398,39 +430,276 @@ export default function ScoreInspectorDrawer({
               )}
             </div>
 
-            {/* Depot Availability Checker */}
-            <div className="pt-2 border-t border-slate-100">
-              <span className="text-slate-400 block text-[10px] uppercase font-bold mb-1.5">
-                Available Depot Stock ({request.resourceType.replace(/_/g, ' ')})
-              </span>
-              <div className="space-y-1.5 text-xs">
-                {matchingDepots.length > 0 ? (
-                  matchingDepots.map((d) => {
-                    const item = d.inventory[request.resourceType];
+            {/* Multi-Resource Itemized Breakdown */}
+            {hasMultiResources && (
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <span className="text-slate-400 block text-[10px] uppercase font-bold">
+                  Itemized Category Requisitions
+                </span>
+                <div className="space-y-1.5">
+                  {request.requestedResources!.map((item) => {
+                    const isFulfilled = item.unfulfilledQty === 0;
+                    const isPartial = item.allocatedQty > 0 && item.unfulfilledQty > 0;
+                    const pct = item.requestedQty > 0 ? (item.allocatedQty / item.requestedQty) * 100 : 0;
+
+                    const totalNetworkStock = depots.reduce(
+                      (sum, d) => sum + (d.inventory[item.resourceType]?.availableStock || 0),
+                      0
+                    );
+
                     return (
-                      <div key={d.id} className="flex items-center justify-between bg-slate-50 p-2 rounded-lg border border-slate-200/70 text-[11px]">
-                        <div className="flex items-center space-x-2">
-                          <Building2 className="w-3.5 h-3.5 text-slate-500" />
-                          <span className="font-medium text-slate-800">{d.name}</span>
+                      <div
+                        key={item.resourceType}
+                        className="p-2.5 rounded-xl border border-slate-200/80 bg-slate-50/70 space-y-1.5"
+                      >
+                        <div className="flex items-center justify-between text-xs">
+                          <div className="flex items-center space-x-2">
+                            {getResourceIcon(item.resourceType)}
+                            <span className="font-bold text-slate-800 capitalize">
+                              {item.resourceType === 'drinking_water'
+                                ? 'Drinking Water'
+                                : item.resourceType === 'medical_supplies'
+                                ? 'Medical Supplies'
+                                : item.resourceType === 'food_rations'
+                                ? 'Food Rations'
+                                : 'Shelter Kits'}
+                            </span>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <span className="font-mono font-semibold text-slate-700 text-[11px]">
+                              {item.allocatedQty} / {item.requestedQty} {item.resourceType === 'drinking_water' ? 'L' : 'Units'}
+                            </span>
+                            {isFulfilled ? (
+                              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
+                                ✓ Fulfilled
+                              </span>
+                            ) : isPartial ? (
+                              <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200">
+                                {item.unfulfilledQty} Deficit
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-bold text-rose-700 bg-rose-50 px-1.5 py-0.2 rounded border border-rose-200">
+                                Unallocated
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <span className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
-                          {item.availableStock} {item.unit}
-                        </span>
+
+                        <div className="w-full h-1.5 bg-slate-200/70 rounded-full overflow-hidden flex">
+                          <div style={{ width: `${pct}%` }} className="bg-emerald-500 h-full transition-all" />
+                          <div style={{ width: `${100 - pct}%` }} className="bg-amber-400/70 h-full transition-all" />
+                        </div>
+
+                        <div className="flex items-center justify-between text-[10px] text-slate-500">
+                          <span>Depot Network Availability:</span>
+                          <span className={`font-mono font-semibold ${totalNetworkStock > 0 ? 'text-slate-700' : 'text-rose-600'}`}>
+                            {totalNetworkStock > 0 ? `${totalNetworkStock} available` : '⚠️ Depleted'}
+                          </span>
+                        </div>
                       </div>
                     );
-                  })
-                ) : (
-                  <div className="text-[11px] text-rose-700 bg-rose-50 p-2.5 rounded-lg border border-rose-200 space-y-1">
-                    <div className="font-semibold">Zero available stock across active depots for this resource.</div>
-                    <Link
-                      href="/inventory"
-                      className="inline-flex items-center space-x-1 text-blue-700 font-bold hover:underline"
-                    >
-                      <span>Issue Supplier Replenishment Order &rarr;</span>
-                    </Link>
-                  </div>
-                )}
+                  })}
+                </div>
               </div>
+            )}
+
+            {/* Interactive Multi-Stage Delivery Pipeline */}
+            {(request.allocatedQty > 0 || request.requestStatus === 'delivered') && (
+              <div className="pt-2.5 border-t border-slate-100 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center space-x-1.5">
+                    <Truck className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Delivery Lifecycle Stages</span>
+                  </span>
+                  <span
+                    className={`text-[9.5px] font-bold px-2 py-0.5 rounded-full border ${
+                      request.requestStatus === 'delivered'
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                        : request.requestStatus === 'dispatched'
+                        ? 'bg-sky-50 text-sky-800 border-sky-200 animate-pulse'
+                        : 'bg-blue-50 text-blue-800 border-blue-200'
+                    }`}
+                  >
+                    {request.requestStatus === 'delivered'
+                      ? 'Stage 3 of 3: Handover Complete'
+                      : request.requestStatus === 'dispatched'
+                      ? 'Stage 2 of 3: In Transit Corridor'
+                      : 'Stage 1 of 3: Warehouse Staged'}
+                  </span>
+                </div>
+
+                {/* 3 Steps Pipeline Cards */}
+                <div className="grid grid-cols-3 gap-2">
+                  {/* Stage 1: Warehouse Staged */}
+                  <div
+                    className={`p-2.5 rounded-xl border text-center transition-all ${
+                      request.requestStatus === 'delivered' || request.requestStatus === 'dispatched'
+                        ? 'bg-emerald-50/60 border-emerald-200 text-emerald-900'
+                        : 'bg-blue-50/70 border-blue-300 ring-2 ring-blue-100 text-blue-900 shadow-2xs'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center mb-1">
+                      <Boxes
+                        className={`w-4 h-4 ${
+                          request.requestStatus === 'delivered' || request.requestStatus === 'dispatched'
+                            ? 'text-emerald-600'
+                            : 'text-blue-600'
+                        }`}
+                      />
+                    </div>
+                    <div className="text-[10.5px] font-bold">1. Staged</div>
+                    <div className="text-[9px] text-slate-500 font-mono mt-0.5">
+                      {request.requestStatus === 'delivered'
+                        ? 'Released'
+                        : `${request.allocatedQty} Reserved`}
+                    </div>
+                  </div>
+
+                  {/* Stage 2: Dispatched */}
+                  <div
+                    className={`p-2.5 rounded-xl border text-center transition-all ${
+                      request.requestStatus === 'delivered'
+                        ? 'bg-emerald-50/60 border-emerald-200 text-emerald-900'
+                        : request.requestStatus === 'dispatched'
+                        ? 'bg-sky-50 border-sky-300 ring-2 ring-sky-100 text-sky-900 animate-pulse shadow-2xs'
+                        : 'bg-slate-50 border-slate-200/80 text-slate-400'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center mb-1">
+                      <Truck
+                        className={`w-4 h-4 ${
+                          request.requestStatus === 'delivered'
+                            ? 'text-emerald-600'
+                            : request.requestStatus === 'dispatched'
+                            ? 'text-sky-600'
+                            : 'text-slate-400'
+                        }`}
+                      />
+                    </div>
+                    <div className="text-[10.5px] font-bold">2. Dispatched</div>
+                    <div className="text-[9px] text-slate-500 font-mono mt-0.5">
+                      {request.requestStatus === 'delivered'
+                        ? 'Completed'
+                        : request.requestStatus === 'dispatched'
+                        ? 'En Route'
+                        : 'Pending'}
+                    </div>
+                  </div>
+
+                  {/* Stage 3: Delivered & Fulfilled */}
+                  <div
+                    className={`p-2.5 rounded-xl border text-center transition-all ${
+                      request.requestStatus === 'delivered'
+                        ? 'bg-emerald-100/80 border-emerald-300 ring-2 ring-emerald-200 text-emerald-950 shadow-2xs'
+                        : 'bg-slate-50 border-slate-200/80 text-slate-400'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center mb-1">
+                      <CheckCircle2
+                        className={`w-4 h-4 ${
+                          request.requestStatus === 'delivered' ? 'text-emerald-700' : 'text-slate-400'
+                        }`}
+                      />
+                    </div>
+                    <div className="text-[10.5px] font-bold">3. Fulfilled</div>
+                    <div className="text-[9px] text-slate-500 font-mono mt-0.5">
+                      {request.requestStatus === 'delivered' ? '100% Handover' : 'Pending'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Explanatory Context Note for the active stage */}
+                <div className="text-[11px] p-2 rounded-lg bg-slate-50 border border-slate-200/60 text-slate-600">
+                  {request.requestStatus === 'delivered' ? (
+                    <span className="text-emerald-800 font-medium flex items-center space-x-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
+                      <span>Demand 100% fulfilled in field. Citizen received supplies. Warehouse stock reservation is cleared.</span>
+                    </span>
+                  ) : request.requestStatus === 'dispatched' ? (
+                    <span className="text-sky-900 font-medium flex items-center space-x-1.5">
+                      <Truck className="w-3.5 h-3.5 text-sky-600 flex-shrink-0" />
+                      <span>Cargo en route through emergency corridor. Click &quot;Confirm Field Delivery&quot; upon citizen receipt.</span>
+                    </span>
+                  ) : (
+                    <span>
+                      {request.allocatedQty} units staged at <strong>{request.allocatedDepotId || 'Depot'}</strong>. Reserved in warehouse and ready for corridor dispatch.
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Depot Availability Checker */}
+            <div className="pt-2 border-t border-slate-100 space-y-2">
+              <span className="text-slate-400 block text-[10px] uppercase font-bold">
+                Depot Stock Readiness
+              </span>
+              {hasMultiResources ? (
+                <div className="space-y-2 text-xs">
+                  {request.requestedResources!.map((item) => {
+                    const itemDepots = depots.filter((d) => (d.inventory[item.resourceType]?.availableStock || 0) > 0);
+                    return (
+                      <div key={item.resourceType} className="bg-slate-50/80 p-2.5 rounded-xl border border-slate-200/80 space-y-1.5">
+                        <div className="flex items-center justify-between font-bold text-slate-800 text-[11px]">
+                          <div className="flex items-center space-x-1.5">
+                            {getResourceIcon(item.resourceType)}
+                            <span className="capitalize">{item.resourceType.replace(/_/g, ' ')}</span>
+                          </div>
+                          <span className="text-[10px] font-mono font-semibold text-slate-600">
+                            {itemDepots.length} Stocked Hub{itemDepots.length !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                        {itemDepots.length > 0 ? (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
+                            {itemDepots.map((d) => {
+                              const inv = d.inventory[item.resourceType];
+                              return (
+                                <div key={d.id} className="flex items-center justify-between bg-white px-2 py-1 rounded border border-slate-200 text-[10.5px]">
+                                  <span className="truncate text-slate-700 font-medium">{d.name}</span>
+                                  <span className="font-mono font-bold text-slate-900 ml-1.5">{inv.availableStock} {inv.unit}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="text-[10.5px] text-rose-700 bg-rose-50 px-2 py-1 rounded border border-rose-200">
+                            ⚠️ Zero stock available across active depots
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="space-y-1.5 text-xs">
+                  {matchingDepots.length > 0 ? (
+                    matchingDepots.map((d) => {
+                      const item = d.inventory[request.resourceType];
+                      return (
+                        <div key={d.id} className="flex items-center justify-between bg-slate-50 p-2 rounded-lg border border-slate-200/70 text-[11px]">
+                          <div className="flex items-center space-x-2">
+                            <Building2 className="w-3.5 h-3.5 text-slate-500" />
+                            <span className="font-medium text-slate-800">{d.name}</span>
+                          </div>
+                          <span className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
+                            {item.availableStock} {item.unit}
+                          </span>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="text-[11px] text-rose-700 bg-rose-50 p-2.5 rounded-lg border border-rose-200 space-y-1">
+                      <div className="font-semibold">Zero available stock across active depots for this resource.</div>
+                      <Link
+                        href="/inventory"
+                        className="inline-flex items-center space-x-1 text-blue-700 font-bold hover:underline"
+                      >
+                        <span>Issue Supplier Replenishment Order &rarr;</span>
+                      </Link>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -464,25 +733,25 @@ export default function ScoreInspectorDrawer({
 
               {/* Status Specific Dispatch & Delivery Buttons */}
               {request.requestStatus === 'delivered' ? (
-                <div className="py-2.5 px-3 bg-emerald-100 text-emerald-900 border border-emerald-300 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 flex-1">
+                <div className="py-2.5 px-3 bg-emerald-100 text-emerald-950 border border-emerald-300 rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 flex-1 shadow-2xs">
                   <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                  <span>Demand 100% Fulfilled</span>
+                  <span>Demand 100% Fulfilled (Reservation Cleared)</span>
                 </div>
               ) : request.requestStatus === 'dispatched' ? (
                 <button
                   onClick={() => onDeliver && onDeliver(request.id)}
-                  className="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center justify-center space-x-1.5 cursor-pointer flex-1"
+                  className="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-2xs hover:shadow-xs flex items-center justify-center space-x-1.5 cursor-pointer flex-1"
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>Confirm Field Delivery</span>
+                  <span>Confirm Field Delivery & Fulfill →</span>
                 </button>
               ) : request.allocatedQty > 0 && request.unfulfilledQty === 0 ? (
                 <button
                   onClick={() => onDispatch && onDispatch(request.id)}
-                  className="py-2.5 px-3 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center justify-center space-x-1.5 cursor-pointer flex-1"
+                  className="py-2.5 px-3 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold transition-all shadow-2xs hover:shadow-xs flex items-center justify-center space-x-1.5 cursor-pointer flex-1"
                 >
                   <Truck className="w-4 h-4" />
-                  <span>Dispatch Relief</span>
+                  <span>Dispatch Relief Package →</span>
                 </button>
               ) : request.allocatedQty > 0 && request.unfulfilledQty > 0 ? (
                 <>

@@ -88,6 +88,7 @@ export default function CoordinatorInventoryPage() {
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [processingOrderId, setProcessingOrderId] = useState<string | null>(null);
+  const [demandFilterTab, setDemandFilterTab] = useState<'all' | 'active' | 'delivered'>('all');
 
   // Form states
   const [selectedResource, setSelectedResource] = useState<ResourceType>('drinking_water');
@@ -192,10 +193,24 @@ export default function CoordinatorInventoryPage() {
               setReplenishments(updated);
             }
           } else if (payload.type === 'REQUEST_UPDATED' && payload.data) {
-            const updatedReq = payload.data as ReliefRequest;
-            setRequests((prev) =>
-              prev.map((r) => (r.id === updatedReq.id ? { ...r, ...updatedReq } : r))
-            );
+            if (Array.isArray(payload.data)) {
+              setRequests(payload.data as ReliefRequest[]);
+            } else {
+              const updatedReq = payload.data as ReliefRequest;
+              setRequests((prev) =>
+                prev.map((r) => (r.id === updatedReq.id ? { ...r, ...updatedReq } : r))
+              );
+            }
+          } else if (payload.type === 'REQUESTS_RESET' && payload.data) {
+            const resetList = payload.data as ReliefRequest[];
+            if (Array.isArray(resetList)) {
+              setRequests(resetList);
+            }
+          } else if (payload.type === 'REQUEST_DELETED' && payload.data) {
+            const deletedId = (payload.data as { id?: string })?.id;
+            if (deletedId) {
+              setRequests((prev) => prev.filter((r) => r.id !== deletedId));
+            }
           } else if (payload.type === 'NEW_REQUEST' && payload.data) {
             const newReq = payload.data as ReliefRequest;
             setRequests((prev) => [newReq, ...prev]);
@@ -361,6 +376,116 @@ export default function CoordinatorInventoryPage() {
     }
   };
 
+  // 5. Citizen Relief Demand Delivery & Fulfillment Controls
+  const handleDeliverDemand = async (id: string) => {
+    const req = requests.find((r) => r.id === id);
+    if (!req) return;
+
+    const updatedRequest: ReliefRequest = { ...req, requestStatus: 'delivered' };
+    setRequests((prev) => prev.map((r) => (r.id === id ? updatedRequest : r)));
+
+    // Clear reserved stock in local depots state so reservation disappears immediately
+    let updatedDepots = depots;
+    if (req.allocatedDepotId) {
+      updatedDepots = depots.map((d) => {
+        if (d.id === req.allocatedDepotId) {
+          const currentItem = d.inventory[req.resourceType];
+          return {
+            ...d,
+            inventory: {
+              ...d.inventory,
+              [req.resourceType]: {
+                ...currentItem,
+                allocatedStock: Math.max(0, currentItem.allocatedStock - req.allocatedQty),
+              },
+            },
+          };
+        }
+        return d;
+      });
+      setDepots(updatedDepots);
+    }
+
+    playSuccessChime();
+    showToast(`✓ Demand ${id} successfully delivered! Warehouse reservation cleared at ${req.allocatedDepotId || 'depot'}.`);
+
+    // Broadcast across tabs
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const ch = new BroadcastChannel('resqgrid_realtime');
+        ch.postMessage({ type: 'REQUEST_UPDATED', data: updatedRequest });
+        ch.postMessage({ type: 'DEPOTS_UPDATED', data: updatedDepots });
+        ch.close();
+      } catch {}
+    }
+
+    try {
+      await fetch('/api/requests', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id,
+          requestStatus: 'delivered',
+          allocatedDepotId: req.allocatedDepotId,
+          allocatedQty: req.allocatedQty,
+          resourceType: req.resourceType,
+        }),
+      });
+
+      if (req.allocatedDepotId && req.allocatedQty > 0) {
+        await fetch('/api/depots', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'deliver',
+            depotId: req.allocatedDepotId,
+            resourceType: req.resourceType,
+            quantity: req.allocatedQty,
+            requestId: req.id,
+            actor: 'Field Operations Crew',
+            details: `Confirmed delivery of ${req.allocatedQty} units of ${req.resourceType.replace('_', ' ')} for ${req.requesterName}. Demand 100% fulfilled. Reserved stock cleared.`,
+          }),
+        });
+      }
+    } catch (err) {
+      console.error('Failed to confirm demand delivery in Neon DB:', err);
+    }
+  };
+
+  const handleDispatchDemand = async (id: string) => {
+    const req = requests.find((r) => r.id === id);
+    if (!req) return;
+
+    const updatedRequest: ReliefRequest = { ...req, requestStatus: 'dispatched' };
+    setRequests((prev) => prev.map((r) => (r.id === id ? updatedRequest : r)));
+
+    showToast(`🚚 Relief cargo for ${id} dispatched into transit corridor!`);
+
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const ch = new BroadcastChannel('resqgrid_realtime');
+        ch.postMessage({ type: 'REQUEST_UPDATED', data: updatedRequest });
+        ch.close();
+      } catch {}
+    }
+
+    try {
+      await fetch('/api/requests', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id,
+          requestStatus: 'dispatched',
+          allocatedDepotId: req.allocatedDepotId,
+          allocatedQty: req.allocatedQty,
+          resourceType: req.resourceType,
+        }),
+      });
+    } catch (err) {
+      console.error('Failed to dispatch demand in Neon DB:', err);
+    }
+  };
+
 
 
   // Helper icons
@@ -466,10 +591,29 @@ export default function CoordinatorInventoryPage() {
       (sum, d) => sum + (d.inventory[def.key]?.availableStock ?? 0),
       0
     );
-    const totalAllocated = depots.reduce(
+
+    // Active citizen demand reservations (allocated or dispatched requests, NOT delivered or rejected)
+    const activeRequestsReserved = requests
+      .filter(
+        (r) =>
+          r.resourceType === def.key &&
+          r.requestStatus !== 'delivered' &&
+          r.requestStatus !== 'rejected' &&
+          (r.requestStatus === 'fully_allocated' ||
+            r.requestStatus === 'partially_allocated' ||
+            r.requestStatus === 'dispatched' ||
+            r.allocatedQty > 0)
+      )
+      .reduce((sum, r) => sum + r.allocatedQty, 0);
+
+    const depotReportedAllocated = depots.reduce(
       (sum, d) => sum + (d.inventory[def.key]?.allocatedStock ?? 0),
       0
     );
+
+    // Total reserved stock: reflects live staged + dispatched transit reservations
+    const totalAllocated = Math.max(depotReportedAllocated, activeRequestsReserved);
+
     const inTransitQty = replenishments
       .filter((r) => r.resourceType === def.key && r.status === 'in_transit')
       .reduce((sum, r) => sum + r.quantity, 0);
@@ -639,11 +783,11 @@ export default function CoordinatorInventoryPage() {
                 <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[10.5px]">
                   <div className="text-slate-500 font-mono text-[10px]">
                     {item.totalAllocated > 0 ? (
-                      <span className="text-blue-600 font-semibold">
+                      <span className="text-blue-600 font-bold font-mono">
                         {item.totalAllocated.toLocaleString()} {item.unit} reserved
                       </span>
                     ) : (
-                      <span>0 reserved</span>
+                      <span className="text-slate-400 font-mono text-[10px]">0 reserved</span>
                     )}
                   </div>
                   <div className="flex items-center space-x-2">
@@ -750,11 +894,29 @@ export default function CoordinatorInventoryPage() {
                           <div className="text-slate-500 font-mono text-[10px]">
                             Min safety: {minBuffer} {unit}
                           </div>
-                          {stock.allocatedStock > 0 && (
-                            <div className="text-blue-600 font-semibold font-mono text-[10px]">
-                              {stock.allocatedStock} {unit} reserved
-                            </div>
-                          )}
+                          {(() => {
+                            const depotReqAllocated = requests
+                              .filter(
+                                (r) =>
+                                  r.resourceType === key &&
+                                  (r.allocatedDepotId === depot.id || (!r.allocatedDepotId && depot.id === 'DEPOT-ALPHA')) &&
+                                  r.requestStatus !== 'delivered' &&
+                                  r.requestStatus !== 'rejected' &&
+                                  (r.requestStatus === 'fully_allocated' ||
+                                    r.requestStatus === 'partially_allocated' ||
+                                    r.requestStatus === 'dispatched' ||
+                                    r.allocatedQty > 0)
+                              )
+                              .reduce((sum, r) => sum + r.allocatedQty, 0);
+                            const effectiveAllocated = Math.max(stock.allocatedStock ?? 0, depotReqAllocated);
+
+                            if (effectiveAllocated <= 0) return null;
+                            return (
+                              <div className="text-blue-600 font-semibold font-mono text-[10px]">
+                                {effectiveAllocated} {unit} reserved
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
 
@@ -867,80 +1029,194 @@ export default function CoordinatorInventoryPage() {
       </div>
 
       {/* Linked Demands & Deficit Queue */}
-      <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs space-y-4">
-        <div className="pb-3 border-b border-slate-100">
-          <h2 className="text-sm font-bold text-slate-900 flex items-center space-x-2">
-            <Boxes className="w-4 h-4 text-indigo-600" />
-            <span>Live Demand Queue Linked to Depot Inventories</span>
-          </h2>
-          <p className="text-[11px] text-slate-500 mt-0.5">
-            Demands actively reserving stock or pending fulfillment from warehouse depots.
-          </p>
-        </div>
+      {(() => {
+        const linkedDemands = requests.filter(
+          (r) => r.requestStatus !== 'rejected' && (r.allocatedQty > 0 || r.requestStatus === 'delivered')
+        );
+        const displayedDemands =
+          demandFilterTab === 'active'
+            ? linkedDemands.filter((r) => r.requestStatus !== 'delivered')
+            : demandFilterTab === 'delivered'
+            ? linkedDemands.filter((r) => r.requestStatus === 'delivered')
+            : linkedDemands;
 
-        <div className="space-y-2">
-          {activeRequests.length === 0 ? (
-            <div className="p-4 text-center text-xs text-slate-400">No active relief demands.</div>
-          ) : (
-            activeRequests.map((req) => (
-              <div
-                key={req.id}
-                className="bg-slate-50/80 border border-slate-200/90 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
-              >
-                <div className="flex items-center space-x-2.5">
-                  <span className="font-mono font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200/70">
-                    {req.id}
-                  </span>
-                  <span className="font-semibold text-slate-900 capitalize">
-                    {req.resourceType.replace('_', ' ')}
-                  </span>
-                  <span className="text-slate-400">•</span>
-                  <span className="text-slate-600 font-medium">{req.location.zoneName}</span>
-                  <span className="text-slate-400">•</span>
-                  <span className="text-slate-600">{req.requesterName}</span>
-                </div>
+        const activeCount = linkedDemands.filter((r) => r.requestStatus !== 'delivered').length;
+        const fulfilledCount = linkedDemands.filter((r) => r.requestStatus === 'delivered').length;
 
-                <div className="flex items-center space-x-3">
-                  <div className="flex items-center space-x-2 text-[11px]">
-                    <span className="text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                      Allocated: {req.allocatedQty}
-                    </span>
-                    {req.unfulfilledQty > 0 ? (
-                      <span className="text-amber-800 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                        Deficit: {req.unfulfilledQty}
-                      </span>
-                    ) : (
-                      <span className="text-emerald-800 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                        100% Met
-                      </span>
-                    )}
-                  </div>
-
-                  {req.allocatedDepotId && (
-                    <span className="font-mono text-[10px] text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200">
-                      {req.allocatedDepotId}
-                    </span>
-                  )}
-
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                      req.requestStatus === 'delivered'
-                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                        : req.requestStatus === 'dispatched'
-                        ? 'bg-sky-50 text-sky-800 border-sky-200'
-                        : req.requestStatus === 'fully_allocated'
-                        ? 'bg-blue-50 text-blue-800 border-blue-200'
-                        : 'bg-amber-50 text-amber-800 border-amber-200'
-                    }`}
-                  >
-                    {req.requestStatus.replace('_', ' ')}
-                  </span>
-                </div>
+        return (
+          <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs space-y-4">
+            <div className="pb-3 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900 flex items-center space-x-2">
+                  <Boxes className="w-4 h-4 text-indigo-600" />
+                  <span>Live Demand Delivery & Fulfillment Pipeline</span>
+                </h2>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Track warehouse staging, transit corridors, and confirm citizen handover to release depot reservations.
+                </p>
               </div>
-            ))
-          )}
-        </div>
-      </div>
+
+              {/* Filter Tabs */}
+              <div className="flex items-center space-x-1 bg-slate-100 p-0.5 rounded-xl text-xs font-semibold self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => setDemandFilterTab('active')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center space-x-1.5 ${
+                    demandFilterTab === 'active'
+                      ? 'bg-white text-blue-700 shadow-2xs font-bold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <span>Active Demands</span>
+                  <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-blue-100 text-blue-800 font-mono font-bold">
+                    {activeCount}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDemandFilterTab('delivered')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center space-x-1.5 ${
+                    demandFilterTab === 'delivered'
+                      ? 'bg-white text-emerald-700 shadow-2xs font-bold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <span>Fulfilled</span>
+                  <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-100 text-emerald-800 font-mono font-bold">
+                    {fulfilledCount}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDemandFilterTab('all')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                    demandFilterTab === 'all'
+                      ? 'bg-white text-slate-900 shadow-2xs font-bold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <span>All ({linkedDemands.length})</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {displayedDemands.length === 0 ? (
+                <div className="p-6 text-center text-xs text-slate-400">
+                  {demandFilterTab === 'active'
+                    ? 'No active in-flight demands currently reserving depot stock. All demands are fulfilled!'
+                    : demandFilterTab === 'delivered'
+                    ? 'No fulfilled demands recorded yet.'
+                    : 'No linked demands recorded.'}
+                </div>
+              ) : (
+                displayedDemands.map((req) => (
+                  <div
+                    key={req.id}
+                    className="bg-slate-50/80 border border-slate-200/90 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="flex items-center space-x-2.5 flex-wrap">
+                      <span className="font-mono font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200/70">
+                        {req.id}
+                      </span>
+                      <span className="font-semibold text-slate-900 capitalize">
+                        {req.resourceType.replace('_', ' ')}
+                      </span>
+                      <span className="text-slate-400">•</span>
+                      <span className="text-slate-600 font-medium">{req.location.zoneName}</span>
+                      <span className="text-slate-400">•</span>
+                      <span className="text-slate-600">{req.requesterName}</span>
+                    </div>
+
+                    <div className="flex items-center space-x-2.5 flex-wrap sm:flex-nowrap justify-between sm:justify-end">
+                      <div className="flex items-center space-x-2 text-[11px]">
+                        <span className="text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                          Allocated: {req.allocatedQty}
+                        </span>
+                        {req.unfulfilledQty > 0 ? (
+                          <span className="text-amber-800 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                            Deficit: {req.unfulfilledQty}
+                          </span>
+                        ) : (
+                          <span className="text-emerald-800 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                            100% Met
+                          </span>
+                        )}
+                      </div>
+
+                      {req.allocatedDepotId && (
+                        <span className="font-mono text-[10px] text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200">
+                          {req.allocatedDepotId}
+                        </span>
+                      )}
+
+                      {/* Delivery Stage Indicator */}
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold border flex items-center space-x-1 ${
+                          req.requestStatus === 'delivered'
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                            : req.requestStatus === 'dispatched'
+                            ? 'bg-sky-50 text-sky-800 border-sky-200 animate-pulse'
+                            : req.requestStatus === 'fully_allocated'
+                            ? 'bg-blue-50 text-blue-800 border-blue-200'
+                            : 'bg-amber-50 text-amber-800 border-amber-200'
+                        }`}
+                      >
+                        {req.requestStatus === 'delivered' ? (
+                          <>
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                            <span>Stage 3: Fulfilled</span>
+                          </>
+                        ) : req.requestStatus === 'dispatched' ? (
+                          <>
+                            <Truck className="w-3 h-3 text-sky-600" />
+                            <span>Stage 2: In Transit</span>
+                          </>
+                        ) : req.requestStatus === 'fully_allocated' ? (
+                          <>
+                            <Boxes className="w-3 h-3 text-blue-600" />
+                            <span>Stage 1: Staged</span>
+                          </>
+                        ) : (
+                          <span>{req.requestStatus.replace('_', ' ')}</span>
+                        )}
+                      </span>
+
+                      {/* Direct Fulfillment & Dispatch Actions */}
+                      {req.requestStatus === 'dispatched' ? (
+                        <button
+                          type="button"
+                          onClick={() => handleDeliverDemand(req.id)}
+                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-2xs hover:shadow flex items-center space-x-1 cursor-pointer whitespace-nowrap"
+                          title="Confirm citizen delivery & clear reserved warehouse stock"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Confirm Delivery</span>
+                        </button>
+                      ) : req.requestStatus === 'fully_allocated' ? (
+                        <button
+                          type="button"
+                          onClick={() => handleDispatchDemand(req.id)}
+                          className="px-2.5 py-1 bg-sky-600 hover:bg-sky-700 text-white rounded-lg text-xs font-bold transition-all shadow-2xs hover:shadow flex items-center space-x-1 cursor-pointer whitespace-nowrap"
+                          title="Dispatch relief cargo into transit corridor"
+                        >
+                          <Truck className="w-3.5 h-3.5" />
+                          <span>Dispatch</span>
+                        </button>
+                      ) : req.requestStatus === 'delivered' ? (
+                        <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg text-[10.5px] font-bold flex items-center space-x-1">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                          <span>100% Fulfilled</span>
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Replenishment Order Right Drawer */}
       {showOrderDrawer && (

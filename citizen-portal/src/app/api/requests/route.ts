@@ -41,21 +41,66 @@ export function formatDbRequest(row: {
   aiTriageDetails: unknown;
   rejectionReason: string | null;
 }): ReliefRequest {
+  let parsedRequestedResources: Array<{
+    resourceType: ResourceType;
+    requestedQty: number;
+    allocatedQty: number;
+    unfulfilledQty: number;
+  }> = [];
+
+  if (Array.isArray(row.requestedResources)) {
+    parsedRequestedResources = row.requestedResources as Array<{
+      resourceType: ResourceType;
+      requestedQty: number;
+      allocatedQty: number;
+      unfulfilledQty: number;
+    }>;
+  } else if (typeof row.requestedResources === 'string') {
+    try {
+      const p = JSON.parse(row.requestedResources);
+      if (Array.isArray(p)) parsedRequestedResources = p;
+    } catch (_) {}
+  }
+
+  if (parsedRequestedResources.length === 0 && row.resourceType) {
+    parsedRequestedResources = [{
+      resourceType: row.resourceType as ResourceType,
+      requestedQty: row.requestedQty,
+      allocatedQty: row.allocatedQty,
+      unfulfilledQty: row.unfulfilledQty,
+    }];
+  }
+
+  // Ensure items in requestedResources reflect fulfilled lifecycle status
+  if (row.requestStatus === 'delivered' || row.requestStatus === 'fully_allocated' || (row.unfulfilledQty === 0 && row.allocatedQty > 0)) {
+    parsedRequestedResources = parsedRequestedResources.map((item) => ({
+      ...item,
+      allocatedQty: item.requestedQty,
+      unfulfilledQty: 0,
+    }));
+  } else if (parsedRequestedResources.length === 1 && (row.allocatedQty > 0 || row.unfulfilledQty !== row.requestedQty)) {
+    parsedRequestedResources[0].allocatedQty = row.allocatedQty;
+    parsedRequestedResources[0].unfulfilledQty = row.unfulfilledQty;
+  }
+
+  const totalReq = parsedRequestedResources.reduce((s, r) => s + (Number(r.requestedQty) || 0), 0);
+  const totalAlloc = parsedRequestedResources.reduce((s, r) => s + (Number(r.allocatedQty) || 0), 0);
+  const totalUnful = parsedRequestedResources.reduce((s, r) => s + (Number(r.unfulfilledQty) || 0), 0);
+
+  const finalRequestedQty = parsedRequestedResources.length > 1 && totalReq > 0 ? totalReq : row.requestedQty;
+  const finalAllocatedQty = parsedRequestedResources.length > 1 ? totalAlloc : row.allocatedQty;
+  const finalUnfulfilledQty = parsedRequestedResources.length > 1 && totalReq > 0 ? totalUnful : row.unfulfilledQty;
+
   return {
     id: row.id,
     timestamp: row.timestamp instanceof Date ? row.timestamp.toISOString() : String(row.timestamp),
     requesterName: row.requesterName,
     contactNumber: row.contactNumber,
     resourceType: row.resourceType as ResourceType,
-    requestedQty: row.requestedQty,
-    allocatedQty: row.allocatedQty,
-    unfulfilledQty: row.unfulfilledQty,
-    requestedResources: (row.requestedResources as Array<{
-      resourceType: ResourceType;
-      requestedQty: number;
-      allocatedQty: number;
-      unfulfilledQty: number;
-    }>) || [],
+    requestedQty: finalRequestedQty,
+    allocatedQty: finalAllocatedQty,
+    unfulfilledQty: finalUnfulfilledQty,
+    requestedResources: parsedRequestedResources,
     location: {
       zoneName: row.locationZoneName,
       lat: row.locationLat,
@@ -87,7 +132,7 @@ export function formatDbRequest(row: {
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
@@ -186,8 +231,10 @@ export async function POST(request: Request) {
       unfulfilledQty: r.requestedQty,
     }));
 
+    const totalRequestedQty = requestedResourcesList.reduce((sum, r) => sum + r.requestedQty, 0);
     const primaryResourceObj = requestedResourcesList.find((r) => r.resourceType === primaryRes) || requestedResourcesList[0];
     const primaryQty = primaryResourceObj?.requestedQty || 100;
+    const initialQty = totalRequestedQty > 0 ? totalRequestedQty : primaryQty;
 
     // 5. Step 3: Persist into Neon Serverless PostgreSQL Database
     const savedRow = await db.reliefRequest.create({
@@ -197,9 +244,9 @@ export async function POST(request: Request) {
         requesterName,
         contactNumber,
         resourceType: primaryRes,
-        requestedQty: primaryQty,
+        requestedQty: initialQty,
         allocatedQty: 0,
-        unfulfilledQty: primaryQty,
+        unfulfilledQty: initialQty,
         requestedResources: requestedResourcesList,
         locationZoneName: zoneContext.zoneName,
         locationLat: lat,
@@ -304,6 +351,38 @@ export async function PATCH(request: Request) {
     return NextResponse.json(formatDbRequest(updated), { headers: CORS_HEADERS });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Update failed';
+    return NextResponse.json({ error: message }, { status: 500, headers: CORS_HEADERS });
+  }
+}
+
+// DELETE /api/requests - Delete specific or unseeded requests from Neon
+export async function DELETE(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+
+    if (id) {
+      await db.reliefRequest.delete({ where: { id } }).catch(() => {});
+      return NextResponse.json({ ok: true, deleted: id }, { headers: CORS_HEADERS });
+    }
+
+    const seededIds = ['REQ-1042', 'REQ-1039', 'REQ-1045', 'REQ-1048', 'REQ-1033'];
+    const result = await db.reliefRequest.deleteMany({
+      where: {
+        id: { notIn: seededIds },
+      },
+    });
+
+    const remainingRows = await db.reliefRequest.findMany({
+      orderBy: { priorityScore: 'desc' },
+    });
+
+    return NextResponse.json(
+      { ok: true, deletedCount: result.count, remaining: remainingRows.map(formatDbRequest) },
+      { headers: CORS_HEADERS }
+    );
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Delete failed';
     return NextResponse.json({ error: message }, { status: 500, headers: CORS_HEADERS });
   }
 }

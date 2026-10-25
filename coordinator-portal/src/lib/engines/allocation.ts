@@ -4,8 +4,16 @@
 // 2. Partial fulfillment is supported when depot inventory < requested amount.
 // 3. Unfulfilled remainder remains prioritized in queue.
 // 4. Depot selection balances stock availability and accessibility.
+// 5. Multi-resource support: all requested resources in package are allocated from optimal operational depots.
 
 import { ReliefRequest, ReliefDepot, ResourceType } from '../types';
+
+export interface DepotAllocationItem {
+  depotId: string;
+  depotName: string;
+  resourceType: ResourceType;
+  quantity: number;
+}
 
 export interface AllocationResult {
   success: boolean;
@@ -17,92 +25,141 @@ export interface AllocationResult {
   unfulfilledQty: number;
   isPartial: boolean;
   message: string;
+  allocations: DepotAllocationItem[];
 }
 
 export function allocateResources(
   request: ReliefRequest,
   depots: ReliefDepot[]
 ): { result: AllocationResult; updatedDepots: ReliefDepot[]; updatedRequest: ReliefRequest } {
-  const resource = request.resourceType;
-  const remainingNeeded = request.unfulfilledQty > 0 ? request.unfulfilledQty : request.requestedQty;
+  let currentDepots = [...depots];
+  const allocations: DepotAllocationItem[] = [];
 
-  // Filter available operational depots
-  const candidates = depots
-    .filter((d) => d.status !== 'isolated')
-    .map((d) => ({
-      depot: d,
-      available: d.inventory[resource]?.availableStock || 0,
-    }))
-    .filter((c) => c.available > 0)
-    .sort((a, b) => b.available - a.available);
-
-  if (candidates.length === 0) {
-    return {
-      result: {
-        success: false,
-        requestId: request.id,
-        depotId: null,
-        depotName: null,
+  // Identify all resources in requisition package
+  const resourcesToAllocate = (request.requestedResources && request.requestedResources.length > 0)
+    ? request.requestedResources.map((r) => ({ ...r }))
+    : [{
+        resourceType: request.resourceType,
         requestedQty: request.requestedQty,
-        allocatedQty: 0,
-        unfulfilledQty: remainingNeeded,
-        isPartial: false,
-        message: `Stock Deficit: Zero available ${resource.replace('_', ' ')} across active depots.`,
-      },
-      updatedDepots: depots,
-      updatedRequest: request,
-    };
-  }
+        allocatedQty: request.allocatedQty,
+        unfulfilledQty: request.unfulfilledQty > 0 ? request.unfulfilledQty : (request.allocatedQty > 0 ? 0 : request.requestedQty),
+      }];
 
-  const bestMatch = candidates[0];
-  const depot = bestMatch.depot;
-  const stockAvailable = bestMatch.available;
+  const updatedRequestedResources = resourcesToAllocate.map((resItem) => {
+    const deficit = resItem.unfulfilledQty > 0
+      ? resItem.unfulfilledQty
+      : (resItem.allocatedQty > 0 ? 0 : resItem.requestedQty);
 
-  const qtyToAllocate = Math.min(remainingNeeded, stockAvailable);
-  const newUnfulfilled = remainingNeeded - qtyToAllocate;
-  const isPartial = qtyToAllocate < remainingNeeded;
-
-  const updatedDepots = depots.map((d) => {
-    if (d.id === depot.id) {
-      const currentItem = d.inventory[resource];
-      return {
-        ...d,
-        inventory: {
-          ...d.inventory,
-          [resource]: {
-            ...currentItem,
-            availableStock: currentItem.availableStock - qtyToAllocate,
-            allocatedStock: currentItem.allocatedStock + qtyToAllocate,
-          },
-        },
-      };
+    if (deficit <= 0) {
+      return { ...resItem };
     }
-    return d;
+
+    // Find available operational depots with stock for this resource
+    const candidates = currentDepots
+      .filter((d) => d.status !== 'isolated')
+      .map((d) => ({
+        depot: d,
+        available: d.inventory[resItem.resourceType]?.availableStock || 0,
+      }))
+      .filter((c) => c.available > 0)
+      .sort((a, b) => b.available - a.available);
+
+    if (candidates.length === 0) {
+      return { ...resItem, unfulfilledQty: deficit };
+    }
+
+    let remainingDeficit = deficit;
+    let newlyAllocatedForItem = 0;
+
+    for (const cand of candidates) {
+      if (remainingDeficit <= 0) break;
+      const allocAmount = Math.min(remainingDeficit, cand.available);
+      if (allocAmount <= 0) continue;
+
+      remainingDeficit -= allocAmount;
+      newlyAllocatedForItem += allocAmount;
+      cand.available -= allocAmount;
+
+      allocations.push({
+        depotId: cand.depot.id,
+        depotName: cand.depot.name,
+        resourceType: resItem.resourceType,
+        quantity: allocAmount,
+      });
+
+      // Update currentDepots inventory immutably
+      currentDepots = currentDepots.map((d) => {
+        if (d.id === cand.depot.id) {
+          const invItem = d.inventory[resItem.resourceType];
+          return {
+            ...d,
+            inventory: {
+              ...d.inventory,
+              [resItem.resourceType]: {
+                ...invItem,
+                availableStock: invItem.availableStock - allocAmount,
+                allocatedStock: invItem.allocatedStock + allocAmount,
+              },
+            },
+          };
+        }
+        return d;
+      });
+    }
+
+    return {
+      ...resItem,
+      allocatedQty: resItem.allocatedQty + newlyAllocatedForItem,
+      unfulfilledQty: remainingDeficit,
+    };
   });
+
+  const totalRequested = updatedRequestedResources.reduce((sum, r) => sum + r.requestedQty, 0);
+  const totalAllocated = updatedRequestedResources.reduce((sum, r) => sum + r.allocatedQty, 0);
+  const totalUnfulfilled = updatedRequestedResources.reduce((sum, r) => sum + r.unfulfilledQty, 0);
+
+  const newlyAllocatedTotal = allocations.reduce((sum, a) => sum + a.quantity, 0);
+  const isPartial = totalUnfulfilled > 0;
+  const isFull = totalUnfulfilled === 0;
+
+  const primaryDepot = allocations.length > 0 ? allocations[0] : null;
+
+  let message = '';
+  if (allocations.length === 0) {
+    message = `Stock Deficit: Insufficient warehouse inventory across active depots to fulfill remaining demand.`;
+  } else if (isFull) {
+    const depotNames = Array.from(new Set(allocations.map((a) => a.depotName))).join(', ');
+    message = updatedRequestedResources.length > 1
+      ? `Fully allocated ${newlyAllocatedTotal} units across ${updatedRequestedResources.length} resources from ${depotNames}.`
+      : `Fully allocated ${newlyAllocatedTotal} units from ${depotNames}.`;
+  } else {
+    message = `Partially allocated ${newlyAllocatedTotal} units. Deficit of ${totalUnfulfilled} units remains in queue.`;
+  }
 
   const updatedRequest: ReliefRequest = {
     ...request,
-    allocatedQty: request.allocatedQty + qtyToAllocate,
-    unfulfilledQty: newUnfulfilled,
-    allocatedDepotId: depot.id,
-    requestStatus: newUnfulfilled === 0 ? 'fully_allocated' : 'partially_allocated',
+    requestedQty: totalRequested > 0 ? totalRequested : request.requestedQty,
+    allocatedQty: totalAllocated,
+    unfulfilledQty: totalUnfulfilled,
+    requestedResources: updatedRequestedResources,
+    allocatedDepotId: primaryDepot ? primaryDepot.depotId : request.allocatedDepotId,
+    requestStatus: isFull ? 'fully_allocated' : totalAllocated > 0 ? 'partially_allocated' : request.requestStatus,
   };
 
   return {
     result: {
-      success: true,
+      success: allocations.length > 0,
       requestId: request.id,
-      depotId: depot.id,
-      depotName: depot.name,
-      requestedQty: request.requestedQty,
-      allocatedQty: qtyToAllocate,
-      unfulfilledQty: newUnfulfilled,
+      depotId: primaryDepot ? primaryDepot.depotId : null,
+      depotName: primaryDepot ? primaryDepot.depotName : null,
+      requestedQty: totalRequested > 0 ? totalRequested : request.requestedQty,
+      allocatedQty: newlyAllocatedTotal,
+      unfulfilledQty: totalUnfulfilled,
       isPartial,
-      message: isPartial
-        ? `Allocated ${qtyToAllocate} units from ${depot.name}. Deficit of ${newUnfulfilled} units remains in queue.`
-        : `Fully allocated ${qtyToAllocate} units from ${depot.name}.`,
+      message,
+      allocations,
     },
-    updatedDepots,
+    updatedDepots: currentDepots,
     updatedRequest,
   };
 }

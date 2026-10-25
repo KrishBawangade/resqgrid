@@ -14,7 +14,7 @@ import OperationsSummaryRibbon from '@/components/dashboard/OperationsSummaryRib
 import PrioritizedQueueTable, { QueueTabType } from '@/components/dashboard/PrioritizedQueueTable';
 import ScoreInspectorDrawer from '@/components/dashboard/ScoreInspectorDrawer';
 import IncidentBriefingBanner from '@/components/dashboard/IncidentBriefingBanner';
-import { Info, RefreshCw } from 'lucide-react';
+import { Info, RefreshCw, RotateCcw } from 'lucide-react';
 
 // Dynamically import Leaflet map for SSR safety
 const InteractiveDisasterMap = dynamic(
@@ -91,8 +91,14 @@ export default function CoordinatorOperationsPage() {
       if (reqRes.ok) {
         const data: ReliefRequest[] = await reqRes.json();
         if (Array.isArray(data)) {
-          setRequests(data);
-          data.forEach((r) => knownRequestIdsRef.current.add(r.id));
+          const seen = new Set<string>();
+          const unique = data.filter((r) => {
+            if (seen.has(r.id)) return false;
+            seen.add(r.id);
+            return true;
+          });
+          setRequests(unique);
+          unique.forEach((r) => knownRequestIdsRef.current.add(r.id));
         }
       }
 
@@ -151,13 +157,29 @@ export default function CoordinatorOperationsPage() {
               return [newReq, ...prev];
             });
           } else if (payload.type === 'REQUEST_UPDATED' && payload.data) {
-            const updated = payload.data as ReliefRequest;
-            setRequests((prev) =>
-              prev.map((r) => (r.id === updated.id ? { ...r, ...updated } : r))
-            );
-            setSelectedRequest((curr) =>
-              curr && curr.id === updated.id ? { ...curr, ...updated } : curr
-            );
+            if (Array.isArray(payload.data)) {
+              setRequests(payload.data as ReliefRequest[]);
+            } else {
+              const updated = payload.data as ReliefRequest;
+              setRequests((prev) =>
+                prev.map((r) => (r.id === updated.id ? { ...r, ...updated } : r))
+              );
+              setSelectedRequest((curr) =>
+                curr && curr.id === updated.id ? { ...curr, ...updated } : curr
+              );
+            }
+          } else if (payload.type === 'REQUESTS_RESET' && payload.data) {
+            const resetList = payload.data as ReliefRequest[];
+            if (Array.isArray(resetList)) {
+              setRequests(resetList);
+              showToast('🔄 Real-Time Sync: Relief requests reset to benchmark state.');
+            }
+          } else if (payload.type === 'REQUEST_DELETED' && payload.data) {
+            const deletedId = (payload.data as { id?: string })?.id;
+            if (deletedId) {
+              setRequests((prev) => prev.filter((r) => r.id !== deletedId));
+              setSelectedRequest((curr) => (curr?.id === deletedId ? null : curr));
+            }
           } else if (payload.type === 'DEPOTS_UPDATED' && payload.data) {
             const updatedDepots = payload.data as ReliefDepot[];
             if (Array.isArray(updatedDepots)) {
@@ -307,35 +329,35 @@ export default function CoordinatorOperationsPage() {
           allocatedQty: updatedRequest.allocatedQty,
           unfulfilledQty: updatedRequest.unfulfilledQty,
           requestedResources: updatedRequest.requestedResources,
-          depotAllocation: result.depotId ? {
-            depotId: result.depotId,
-            resourceType: req.resourceType,
-            quantity: result.allocatedQty,
-          } : undefined,
+          depotAllocations: result.allocations || [],
         }),
       });
 
-      if (result.depotId && result.allocatedQty > 0) {
-        await fetch('/api/depots', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'allocate',
-            depotId: result.depotId,
-            resourceType: req.resourceType,
-            quantity: result.allocatedQty,
-            requestId: req.id,
-            actor: 'Stock Allocation Engine',
-            details: result.message,
-          }),
-        });
+      if (result.allocations && result.allocations.length > 0) {
+        for (const alloc of result.allocations) {
+          if (alloc.quantity > 0) {
+            await fetch('/api/depots', {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'allocate',
+                depotId: alloc.depotId,
+                resourceType: alloc.resourceType,
+                quantity: alloc.quantity,
+                requestId: req.id,
+                actor: 'Stock Allocation Engine',
+                details: `Allocated ${alloc.quantity} ${alloc.resourceType.replace('_', ' ')} from ${alloc.depotName}`,
+              }),
+            });
+          }
+        }
       }
     } catch (err) {
       console.error('Failed to persist allocation to Neon DB:', err);
     }
   };
 
-  // 3. Dispatch Relief Package to Field
+  // 3. Dispatch Relief Package to Field (Stage 2: In Transit Corridor)
   const handleDispatch = async (id: string) => {
     const req = requests.find((r) => r.id === id);
     if (!req) return;
@@ -352,7 +374,7 @@ export default function CoordinatorOperationsPage() {
       category: 'ALLOCATION',
       action: 'RELIEF_DISPATCHED',
       actor: 'Chief Coordinator Vance',
-      details: `Dispatched ${req.allocatedQty} units of ${req.resourceType.replace('_', ' ')} for ${req.requesterName} from ${req.allocatedDepotId || 'Depot'}.`,
+      details: `Dispatched ${req.allocatedQty} units of ${req.resourceType.replace('_', ' ')} for ${req.requesterName} from ${req.allocatedDepotId || 'Depot'}. Cargo en route in transit corridor.`,
       delta: `Dispatched ${req.id}`,
     };
     setAuditLogs((prev) => [log, ...prev]);
@@ -371,14 +393,20 @@ export default function CoordinatorOperationsPage() {
       await fetch('/api/requests', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, requestStatus: 'dispatched' }),
+        body: JSON.stringify({
+          id,
+          requestStatus: 'dispatched',
+          allocatedDepotId: req.allocatedDepotId,
+          allocatedQty: req.allocatedQty,
+          resourceType: req.resourceType,
+        }),
       });
     } catch (err) {
       console.error('Failed to persist dispatch to Neon DB:', err);
     }
   };
 
-  // 4. Confirm Citizen Field Delivery & Fulfill Demand
+  // 4. Confirm Citizen Field Delivery & Fulfill Demand (Stage 3: 100% Fulfilled & Reservation Cleared)
   const handleDeliver = async (id: string) => {
     const req = requests.find((r) => r.id === id);
     if (!req) return;
@@ -389,26 +417,29 @@ export default function CoordinatorOperationsPage() {
       setSelectedRequest(updatedRequest);
     }
 
-    // Deduct reserved stock in frontend state
+    // Deduct reserved stock in frontend state so it immediately shows as unreserved
+    let updatedDepots = depots;
+    const itemsToClear = (req.requestedResources && req.requestedResources.length > 0)
+      ? req.requestedResources
+      : [{ resourceType: req.resourceType, allocatedQty: req.allocatedQty, requestedQty: req.requestedQty, unfulfilledQty: 0 }];
+
     if (req.allocatedDepotId) {
-      setDepots((prev) =>
-        prev.map((d) => {
-          if (d.id === req.allocatedDepotId) {
-            const currentItem = d.inventory[req.resourceType];
-            return {
-              ...d,
-              inventory: {
-                ...d.inventory,
-                [req.resourceType]: {
-                  ...currentItem,
-                  allocatedStock: Math.max(0, currentItem.allocatedStock - req.allocatedQty),
-                },
-              },
-            };
+      updatedDepots = depots.map((d) => {
+        if (d.id === req.allocatedDepotId) {
+          const newInv = { ...d.inventory };
+          for (const item of itemsToClear) {
+            if (item.allocatedQty > 0 && newInv[item.resourceType]) {
+              newInv[item.resourceType] = {
+                ...newInv[item.resourceType],
+                allocatedStock: Math.max(0, newInv[item.resourceType].allocatedStock - item.allocatedQty),
+              };
+            }
           }
-          return d;
-        })
-      );
+          return { ...d, inventory: newInv };
+        }
+        return d;
+      });
+      setDepots(updatedDepots);
     }
 
     const log: AuditLogEntry = {
@@ -417,17 +448,18 @@ export default function CoordinatorOperationsPage() {
       category: 'ALLOCATION',
       action: 'DELIVERY_FULFILLED',
       actor: 'Field Operations Crew',
-      details: `Confirmed delivery of ${req.allocatedQty} units of ${req.resourceType.replace('_', ' ')} to ${req.requesterName}. Demand 100% fulfilled.`,
+      details: `Confirmed delivery of ${req.allocatedQty} total units across ${itemsToClear.length} categories to ${req.requesterName}. Demand 100% fulfilled. Reserved stock cleared.`,
       delta: `Delivered ${req.id}`,
     };
     setAuditLogs((prev) => [log, ...prev]);
     showToast(`✓ Demand ${id} successfully delivered & 100% fulfilled in field!`);
 
-    // Cross-tab broadcast
+    // Cross-tab broadcast: broadcast BOTH request AND depots so inventory page updates instantly
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
       try {
         const ch = new BroadcastChannel('resqgrid_realtime');
         ch.postMessage({ type: 'REQUEST_UPDATED', data: updatedRequest });
+        ch.postMessage({ type: 'DEPOTS_UPDATED', data: updatedDepots });
         ch.close();
       } catch {}
     }
@@ -436,23 +468,34 @@ export default function CoordinatorOperationsPage() {
       await fetch('/api/requests', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, requestStatus: 'delivered' }),
+        body: JSON.stringify({
+          id,
+          requestStatus: 'delivered',
+          allocatedDepotId: req.allocatedDepotId,
+          allocatedQty: req.allocatedQty,
+          resourceType: req.resourceType,
+          requestedResources: req.requestedResources,
+        }),
       });
 
       if (req.allocatedDepotId) {
-        await fetch('/api/depots', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'deliver',
-            depotId: req.allocatedDepotId,
-            resourceType: req.resourceType,
-            quantity: req.allocatedQty,
-            requestId: req.id,
-            actor: 'Field Operations Crew',
-            details: `Delivered to citizen for ${req.id}`,
-          }),
-        });
+        for (const item of itemsToClear) {
+          if (item.allocatedQty > 0) {
+            await fetch('/api/depots', {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'deliver',
+                depotId: req.allocatedDepotId,
+                resourceType: item.resourceType,
+                quantity: item.allocatedQty,
+                requestId: req.id,
+                actor: 'Field Operations Crew',
+                details: `Delivered ${item.allocatedQty} ${item.resourceType.replace('_', ' ')} for ${req.id}. Warehouse reservation cleared.`,
+              }),
+            });
+          }
+        }
       }
     } catch (err) {
       console.error('Failed to persist delivery to Neon DB:', err);
@@ -612,6 +655,35 @@ export default function CoordinatorOperationsPage() {
     }
   };
 
+  // 6. Reset Demo Scenario to Pristine Benchmark
+  const [isResettingScenario, setIsResettingScenario] = useState(false);
+
+  const handleResetScenario = async () => {
+    setIsResettingScenario(true);
+    try {
+      const res = await fetch('/api/scenario/reset', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.requests) {
+          setRequests(data.requests);
+        }
+        if (data.depots) {
+          setDepots(data.depots);
+        }
+        setSelectedRequest(null);
+        showToast('✓ Disaster scenario reset to benchmark baseline: all 5 initial requests restored in Neon DB.');
+        loadInitialRequests(false);
+      } else {
+        showToast('Failed to reset scenario. Check server logs.');
+      }
+    } catch (err) {
+      console.error('Reset scenario error:', err);
+      showToast('Network error while resetting scenario.');
+    } finally {
+      setIsResettingScenario(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* Toast Notification */}
@@ -640,15 +712,27 @@ export default function CoordinatorOperationsPage() {
           </span>
         </div>
 
-        <button
-          onClick={() => loadInitialRequests(true)}
-          disabled={isRefreshingManually}
-          className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-lg text-xs font-semibold text-slate-700 bg-white border border-slate-200/90 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-2xs disabled:opacity-50"
-          title="Manually trigger immediate Neon PostgreSQL database fetch"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingManually ? 'animate-spin text-blue-600' : 'text-slate-500'}`} />
-          <span>{isRefreshingManually ? 'Syncing...' : 'Sync Now'}</span>
-        </button>
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={handleResetScenario}
+            disabled={isResettingScenario}
+            className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-lg text-xs font-semibold text-slate-700 bg-white border border-slate-200/90 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-2xs disabled:opacity-50"
+            title="Reset requests, depot inventory, and orders to benchmark starting state in Neon DB"
+          >
+            <RotateCcw className={`w-3.5 h-3.5 ${isResettingScenario ? 'animate-spin text-amber-600' : 'text-slate-500'}`} />
+            <span>{isResettingScenario ? 'Resetting...' : 'Reset Scenario'}</span>
+          </button>
+
+          <button
+            onClick={() => loadInitialRequests(true)}
+            disabled={isRefreshingManually}
+            className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-lg text-xs font-semibold text-slate-700 bg-white border border-slate-200/90 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-2xs disabled:opacity-50"
+            title="Manually trigger immediate Neon PostgreSQL database fetch"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingManually ? 'animate-spin text-blue-600' : 'text-slate-500'}`} />
+            <span>{isRefreshingManually ? 'Syncing...' : 'Sync Now'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Top Operations KPI Metrics Ribbon */}
@@ -656,6 +740,14 @@ export default function CoordinatorOperationsPage() {
         requests={requests}
         depots={depots}
         onSelectPendingVerification={() => {
+          setSelectedRequest(null);
+          setQueueTab('needs_attention');
+        }}
+        onSelectCriticalTriage={() => {
+          setSelectedRequest(null);
+          setQueueTab('needs_attention');
+        }}
+        onSelectActiveDemands={() => {
           setSelectedRequest(null);
           setQueueTab('needs_attention');
         }}
@@ -670,6 +762,7 @@ export default function CoordinatorOperationsPage() {
             depots={depots}
             selectedRequestId={selectedRequest?.id || null}
             onSelectRequest={(req) => setSelectedRequest(req)}
+            onResetScenario={handleResetScenario}
           />
         </div>
 
@@ -688,6 +781,7 @@ export default function CoordinatorOperationsPage() {
                 onReject={handleReject}
                 onRestore={handleRestore}
                 onDispatch={handleDispatch}
+                onDeliver={handleDeliver}
               />
             ) : (
               <ScoreInspectorDrawer

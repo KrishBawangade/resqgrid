@@ -10,6 +10,7 @@ export type VerificationStatus = 'pending' | 'verified' | 'flagged' | 'rejected'
 
 export type RequestStatus = 
   | 'submitted' 
+  | 'queued'
   | 'verified' 
   | 'partially_allocated' 
   | 'fully_allocated' 

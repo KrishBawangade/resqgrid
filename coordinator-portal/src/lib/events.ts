@@ -16,6 +16,7 @@ export type RealtimeEventType =
   | 'NEW_REQUEST' 
   | 'REQUEST_UPDATED' 
   | 'REQUEST_DELETED'
+  | 'REQUESTS_RESET'
   | 'DEPOTS_UPDATED'
   | 'REPLENISHMENT_UPDATED'
   | 'AUDIT_LOG_ADDED';

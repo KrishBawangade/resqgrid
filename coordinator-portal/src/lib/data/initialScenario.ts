@@ -28,7 +28,7 @@ export const INITIAL_DEPOTS: ReliefDepot[] = [
         resourceType: 'medical_supplies',
         totalCapacity: 250,
         availableStock: 45,
-        allocatedStock: 0,
+        allocatedStock: 45,
         unit: 'Kits',
       },
       shelter_kits: {
