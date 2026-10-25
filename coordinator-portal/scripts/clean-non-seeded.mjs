@@ -43,8 +43,10 @@ const db = new PrismaClient({ adapter });
 // Official Seeded IDs from initialScenario.ts
 const SEEDED_REQUEST_IDS = new Set([
   'REQ-1042',
+  'REQ-1052',
   'REQ-1039',
   'REQ-1045',
+  'REQ-1055',
   'REQ-1048',
   'REQ-1033',
 ]);

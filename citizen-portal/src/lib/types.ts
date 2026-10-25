@@ -57,6 +57,16 @@ export interface PriorityOverride {
   timestamp: string;
 }
 
+export interface StageTimestamps {
+  submitted?: string;
+  verified?: string;
+  prioritized?: string;
+  allocated?: string;
+  dispatched?: string;
+  delivered?: string;
+  rejected?: string;
+}
+
 export interface ReliefRequest {
   id: string; // e.g. "REQ-1042"
   timestamp: string; // ISO String
@@ -86,6 +96,7 @@ export interface ReliefRequest {
   waitingMinutes: number;
   rejectionReason?: string;
   rejectedAt?: string;
+  stageTimestamps?: StageTimestamps;
   aiTriageInsight?: string;
   aiConfidence?: number;
   aiTriageDetails?: {
@@ -94,6 +105,7 @@ export interface ReliefRequest {
     vulnerabilityScore?: number;
     vulnerabilityReason?: string;
     engineUsed?: 'gemini-llm' | 'local-nlp';
+    stageTimestamps?: StageTimestamps;
   };
 }
 

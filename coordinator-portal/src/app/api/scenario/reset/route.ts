@@ -62,6 +62,7 @@ export async function POST() {
           waitingMinutes: req.waitingMinutes,
           aiTriageInsight: req.aiTriageInsight || null,
           aiConfidence: req.aiConfidence || null,
+          aiTriageDetails: req.stageTimestamps ? { stageTimestamps: req.stageTimestamps } : null,
           rejectionReason: req.rejectionReason || null,
         },
       });
@@ -135,7 +136,7 @@ export async function POST() {
       data: {
         action: 'SCENARIO_RESET',
         actor: 'Chief Incident Coordinator',
-        details: 'Benchmark disaster scenario reset to baseline state. All 5 initial requests, depot stocks, and supplier pipelines re-initialized.',
+        details: 'Benchmark disaster scenario reset to baseline state. Initial requests (including multi-resource packages), depot stocks, and supplier pipelines re-initialized.',
       },
     });
 
