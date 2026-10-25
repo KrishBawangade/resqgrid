@@ -313,7 +313,8 @@ export async function POST(request: Request) {
 
     // Stream event directly to Coordinator Portal Realtime SSE channel
     try {
-      fetch('http://localhost:3000/api/requests/stream', {
+      const coordinatorUrl = process.env.COORDINATOR_URL || process.env.NEXT_PUBLIC_COORDINATOR_URL || 'https://resqgrid-main.vercel.app';
+      fetch(`${coordinatorUrl}/api/requests/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'NEW_REQUEST', data: result }),

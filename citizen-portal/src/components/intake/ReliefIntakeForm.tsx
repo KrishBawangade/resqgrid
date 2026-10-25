@@ -201,9 +201,10 @@ export default function ReliefIntakeForm() {
         } catch (_) {}
       }
 
-      // Fire cross-origin ping to coordinator portal server (port 3000)
+      // Fire cross-origin ping to coordinator portal server
       try {
-        fetch('http://localhost:3000/api/requests/sync', {
+        const coordinatorUrl = process.env.NEXT_PUBLIC_COORDINATOR_URL || 'https://resqgrid-main.vercel.app';
+        fetch(`${coordinatorUrl}/api/requests/sync`, {
           method: 'POST',
           mode: 'no-cors',
           headers: { 'Content-Type': 'application/json' },

@@ -298,7 +298,8 @@ export default function RequestTrackerView() {
 
     let es: EventSource | null = null;
     try {
-      es = new EventSource('http://localhost:3000/api/requests/stream');
+      const coordinatorUrl = process.env.NEXT_PUBLIC_COORDINATOR_URL || 'https://resqgrid-main.vercel.app';
+      es = new EventSource(`${coordinatorUrl}/api/requests/stream`);
 
       es.onmessage = (event) => {
         if (!event.data) return;

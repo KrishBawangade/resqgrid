@@ -18,6 +18,10 @@
 
 </div>
 
+### 🌐 Live Production Deployments
+- 🏢 **Coordinator Command Center:** [`https://resqgrid-main.vercel.app`](https://resqgrid-main.vercel.app)
+- 🤝 **Citizen Emergency Portal:** [`https://resqgrid-citizen.vercel.app`](https://resqgrid-citizen.vercel.app)
+
 ---
 
 ## 📌 Executive Summary & Problem Statement
