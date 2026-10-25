@@ -42,6 +42,7 @@ body {
 /* Custom Leaflet divIcon transparent reset */
 .custom-depot-pin,
 .custom-request-pin,
+.custom-fulfilled-pin,
 .custom-hazard-label {
   background: transparent !important;
   border: none !important;
