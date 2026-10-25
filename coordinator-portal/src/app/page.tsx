@@ -69,6 +69,7 @@ export default function CoordinatorOperationsPage() {
   const initialLoadDoneRef = React.useRef(false);
   const knownRequestIdsRef = React.useRef<Set<string>>(new Set(INITIAL_REQUESTS.map((r) => r.id)));
   const isFetchingRef = React.useRef(false);
+  const activeRouteRef = React.useRef<string>('PRIMARY_LBS_CORRIDOR');
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -189,6 +190,23 @@ export default function CoordinatorOperationsPage() {
           } else if (payload.type === 'AUDIT_LOG_ADDED' && payload.data) {
             const newLog = payload.data as AuditLogEntry;
             setAuditLogs((prev) => [newLog, ...prev]);
+          } else if (payload.type === 'DISASTER_STATE_CHANGED' && payload.data) {
+            const nextState = payload.data.disasterState;
+            if (!nextState?.activeRoute) return;
+
+            const prevRoute = activeRouteRef.current;
+            const newRoute = nextState.activeRoute;
+
+            // ONLY generate toast messages when route is rerouted and route is cleared
+            if (prevRoute !== newRoute) {
+              activeRouteRef.current = newRoute;
+              playAlertChime();
+              if (newRoute === 'ELEVATED_BKC_BYPASS') {
+                showToast(`⛔ Dynamic Reroute: LBS Underpass submerged! Convoys rerouted via BKC Elevated Bypass (+14m ASL).`);
+              } else if (newRoute === 'PRIMARY_LBS_CORRIDOR') {
+                showToast(`🟢 Route Cleared: LBS Underpass passable. Primary logistics corridor reopened.`);
+              }
+            }
           }
         } catch {
           // Ignored for keepalive ping

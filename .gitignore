@@ -45,3 +45,7 @@ Thumbs.db
 *.tsbuildinfo
 next-env.d.ts
 **/next-env.d.ts
+
+# Hardware firmware & local IoT scripts
+hardware/
+

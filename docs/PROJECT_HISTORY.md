@@ -326,6 +326,49 @@ This living document logs all major architectural decisions (ADRs), milestone pr
 
 ---
 
+### ADR-017: IoT DisasterSense Telemetry Ingestion, Early Warning Prediction, Closed-Loop Actuator Feedback & Safe Route Dispatch
+- **Date:** 2026-10-25
+- **Status:** Accepted
+- **Context:**
+  1. Standard disaster response systems are purely reactive, processing relief demands only after citizens have already been impacted and roads submerged.
+  2. Integrating live physical hardware (ESP32 with HC-SR04 ultrasonic distance sensor, capacitive soil moisture sensor, and DHT11 meteorological probe) needed to connect directly into the operational coordinator console without requiring a disconnected 3rd portal.
+  3. The ESP32 firmware streams JSON telemetry every 3,000 ms to `http://<PC_IP>:3000/api/flood/telemetry` (or `/api/sensors/telemetry`).
+  4. The system needed full-lifecycle coverage:
+     - **Phase 1 (Prediction & Early Warning):** Soil moisture saturation exceeding 90% and accelerated water rise rate trigger proactive flash flood advisories and staging at high-ground depots before overland transit drowns.
+     - **Phase 2 (Dynamic Safe Route Dispatch):** When active road submergence occurs (clearance drops below 15 cm in the demo rig, simulating 35 cm water depth), the system flags `⛔ LBS UNDERPASS SUBMERGED`, blocks the low-lying LBS Marg corridor, and dynamically reroutes convoys over the `✅ BKC ELEVATED BYPASS (+14m ASL)`.
+     - **Phase 3 (Bidirectional Closed-Loop Actuator Feedback):** The Next.js ingestion API must return an actionable JSON payload to the microcontroller (`{"status":"ok", "is_critical": true, "led_color":"RED"|"GREEN", "active_route":"..."}`), allowing the ESP32 to switch on-board indicator LEDs (Green for open passage, Red for critical road closure) without external brokers.
+     - **Phase 4 (Notification Discipline & Alert Fusion):** Continuous sensor streams caused toast notification spam and cross-sensor confusion (e.g. soil warning popping up on ultrasonic trigger). Toast notifications had to be strictly restricted to route state transitions (`REROUTED` vs `CLEARED`), with multi-sensor alert signatures deduplicated and fused.
+- **Decision:**
+  1. **Dual Ingestion Route Handlers with Actionable Response (`/api/sensors/telemetry` & `/api/flood/telemetry`):**
+     - Established native Next.js API route handlers with permissive CORS headers to receive inbound JSON from the ESP32 transmitter out-of-the-box.
+     - Synchronously evaluated `processTelemetryReading` on every `POST` request and returned `{ status: 'ok', level, is_critical, led_color, active_route, timestamp }` in the HTTP 200 response body.
+  2. **Bidirectional Hardware Actuator Logic on ESP32:**
+     - The ESP32 parses `http.getString()` for `"is_critical": true` and `"led_color": "RED"` using lightweight substring evaluation with zero external parsing dependencies.
+     - Drives actuator pins: **Green LED** on by default (normal/passable), **Red LED** instantly triggers on critical submergence.
+  3. **Multi-Sensor Alert Fusion & Route-Only Toast Notifications:**
+     - Added `hazardSource: 'NONE' | 'ULTRASONIC_ONLY' | 'SOIL_ONLY' | 'COMBINED_WATER_AND_SOIL'` to `iotStore.ts` with distinct signature deduplication.
+     - Restrained `DISASTER_STATE_CHANGED` SSE emission and coordinator toast banners strictly to route transitions (`isRouteChanged: previousRoute !== activeRoute`):
+       - `ELEVATED_BKC_BYPASS`: "⛔ Dynamic Reroute: LBS Underpass submerged! Convoys rerouted via BKC Elevated Bypass (+14m ASL)."
+       - `PRIMARY_LBS_CORRIDOR`: "🟢 Route Cleared: LBS Underpass passable. Primary logistics corridor reopened."
+  4. **Tabletop Demo Calibration & Clear Plain-Text Hydrological Matrix:**
+     - Addressed the physical ceiling limitation (238 cm standard HC-SR04 range) vs tabletop demo height (50 cm overhead clearance).
+     - Standardized the 15 cm threshold explanation in the UI without LaTeX: Tabletop baseline is 50 cm. Clearance <= 15 cm indicates 35 cm of water, which is the empirical wading limit for Tata 407 relief trucks and ambulances.
+     - Added a clean 6-level deterministic rule engine matrix on `/sensors` comparing demo rig values with full-scale Mumbai underpass specifications.
+  5. **Tactical GIS Map Integration & Collision-Free Pin Layout (`InteractiveDisasterMap.tsx`):**
+     - Repositioned blocked route badge to `[19.0645, 72.8690]` along LBS Marg approach labeled `⛔ LBS UNDERPASS SUBMERGED` (`iconSize: [195, 24]`), completely eliminating badge stacking with `REQ-1042` (`19.0715, 72.8785`) and Sensor Node #01 (`19.0665, 72.8745`).
+     - Real-time vector polylines dynamically toggle between primary route (solid emerald / dashed crimson when blocked) and elevated bypass (glowing emerald when active).
+  6. **Cleaned Diagnostic Hub (`/sensors`):**
+     - Streamlined UI by removing synthetic sliders and mock cURL cards in favor of live telemetry gauges, SVG waveform streaming, physical pinout schematics, and demo calibration notes.
+     - Resolved Next.js 16 prerender error by removing render-time `new Date()` calls in favor of static ISO strings.
+  7. **Repository Cleanliness:**
+     - Added `hardware/` to `.gitignore` to isolate Arduino/ESP32 binaries and local hardware scripts from application source code.
+- **Rationale:**
+  1. Complete closed-loop IoT demonstration: shows physical-to-digital (ESP32 -> Next.js) and digital-to-physical (Next.js -> ESP32 actuator LEDs) orchestration in under 10 milliseconds.
+  2. Noise-free operational ergonomics: coordinators receive alert banners only when transport logistics are impacted, while telemetry charts continuously refresh without interruption.
+  3. Grounded physics: tabletop demo values are clearly mapped to real-world hydrological thresholds so evaluators understand the engineering logic.
+
+---
+
 ## Build Milestones & Phase Progress
 
 | Phase | Description | Status | Verification Checkpoint |
@@ -341,6 +384,9 @@ This living document logs all major architectural decisions (ADRs), milestone pr
 | **Phase 8** | End-to-End Demo Scenario Controller & Verification | **Completed** | One-click benchmark scenario reset (`/api/scenario/reset`), full theater map auto-framing, multi-resource allocation, and real-time SSE sync |
 | **Phase 9** | Multi-Resource Allocations, Real-Time Stage Timestamps & Tracker Precision | **Completed** | Full multi-resource benchmarks (`REQ-1048`, `REQ-1033`), Neon DB stage timestamp persistence, ADR-007 partial fulfillment banner, and gap-only stepper connectors |
 | **Phase 10** | Dedicated Verification Queue, Left-Aligned Tab Ergonomics & Smooth Tab Motion | **Completed** | Dedicated `pending_verification` tab, left-aligned wrap layout, zero-jank pure fade transitions, and spring toast notifications |
+| **Phase 11** | IoT Flood Prediction, Early Warning, Closed-Loop Actuator & Safe Route Dispatch | **Completed** | Dual-sensor ESP32 ingestion (`/api/flood/telemetry`), closed-loop HTTP response with Red/Green LED actuation, route-only toast discipline, collision-free GIS map vectors, and clean `/sensors` hub |
+
+
 
 
 

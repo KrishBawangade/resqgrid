@@ -19,7 +19,9 @@ export type RealtimeEventType =
   | 'REQUESTS_RESET'
   | 'DEPOTS_UPDATED'
   | 'REPLENISHMENT_UPDATED'
-  | 'AUDIT_LOG_ADDED';
+  | 'AUDIT_LOG_ADDED'
+  | 'SENSOR_TELEMETRY'
+  | 'DISASTER_STATE_CHANGED';
 
 export interface RealtimeEventPayload {
   type: RealtimeEventType;

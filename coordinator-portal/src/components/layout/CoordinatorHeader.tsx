@@ -10,7 +10,8 @@ import {
   FileText, 
   ExternalLink,
   ShieldCheck,
-  UserCheck
+  UserCheck,
+  Activity
 } from 'lucide-react';
 
 export default function CoordinatorHeader() {
@@ -139,6 +140,18 @@ export default function CoordinatorHeader() {
                 Shortage
               </span>
             )}
+          </Link>
+
+          <Link
+            href="/sensors"
+            className={`px-3 py-1.5 rounded-lg transition-colors flex items-center space-x-1.5 ${
+              pathname === '/sensors'
+                ? 'bg-slate-100 text-slate-900 font-bold'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+            }`}
+          >
+            <Activity className="w-3.5 h-3.5 text-blue-600" />
+            <span>IoT Early Warning</span>
           </Link>
 
           <Link
