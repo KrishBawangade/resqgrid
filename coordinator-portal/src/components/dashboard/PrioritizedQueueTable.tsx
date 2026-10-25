@@ -35,6 +35,7 @@ interface PrioritizedQueueTableProps {
   onVerify: (id: string) => void;
   onReject: (id: string, reason: string) => void;
   onRestore: (id: string) => void;
+  onAllocate?: (id: string) => void;
   onDispatch?: (id: string) => void;
   onDeliver?: (id: string) => void;
 }
@@ -48,6 +49,7 @@ export default function PrioritizedQueueTable({
   onVerify,
   onReject,
   onRestore,
+  onAllocate,
   onDispatch,
   onDeliver,
 }: PrioritizedQueueTableProps) {
@@ -557,6 +559,18 @@ export default function PrioritizedQueueTable({
                             >
                               <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                               <span>Verify</span>
+                            </button>
+                          ) : onAllocate ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onAllocate(req.id);
+                              }}
+                              className="text-blue-700 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-md font-bold flex items-center space-x-1 border border-blue-200 transition-all shadow-2xs hover:shadow-xs cursor-pointer"
+                              title="Allocate warehouse stock to demand"
+                            >
+                              <Boxes className="w-3 h-3 text-blue-600" />
+                              <span>Allocate</span>
                             </button>
                           ) : (
                             <span className="text-blue-600 font-semibold flex items-center space-x-0.5 hover:underline">

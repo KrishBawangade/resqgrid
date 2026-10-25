@@ -839,6 +839,7 @@ export default function CoordinatorOperationsPage() {
                 onVerify={handleVerify}
                 onReject={handleReject}
                 onRestore={handleRestore}
+                onAllocate={handleAllocate}
                 onDispatch={handleDispatch}
                 onDeliver={handleDeliver}
               />

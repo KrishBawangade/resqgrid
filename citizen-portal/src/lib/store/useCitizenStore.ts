@@ -112,6 +112,39 @@ export function useCitizenStore() {
     };
   }, []);
 
+  // Listen for real-time updates via SSE stream and update requests list in real time
+  useEffect(() => {
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource('http://localhost:3000/api/requests/stream');
+      es.onmessage = (event) => {
+        if (!event.data) return;
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === 'REQUEST_UPDATED' && payload.data) {
+            const updated = payload.data as ReliefRequest;
+            setRequests((prev) => {
+              const next = prev.map((r) => (r.id === updated.id ? { ...r, ...updated } : r));
+              try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+              } catch (_) {}
+              return next;
+            });
+          } else if (payload.type === 'REQUESTS_RESET' && Array.isArray(payload.data)) {
+            setRequests(payload.data);
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(payload.data));
+            } catch (_) {}
+          }
+        } catch (_) {}
+      };
+    } catch (_) {}
+
+    return () => {
+      if (es) es.close();
+    };
+  }, []);
+
   return {
     requests,
     isLoaded,

@@ -237,6 +237,56 @@ This living document logs all major architectural decisions (ADRs), milestone pr
 
 ---
 
+
+### ADR-015: Multi-Resource Allocation Benchmark Standardization, Timestamp Persistence & Lifecycle Stepper Precision
+- **Date:** 2026-10-25
+- **Status:** Accepted
+- **Context:**
+  1. **Multi-Resource Demand Benchmarks:**
+     - Added multi-resource demands (`REQ-1048` and `REQ-1033`) in initial scenario benchmarks requiring simultaneous supplies (food packets, clean water, medical kits, and hygiene supplies) with per-category itemized allocation and transparent tracking.
+  2. **End-to-End Lifecycle Stepper State Consistency:**
+     - When coordinators execute actions in the command center, the corresponding lifecycle milestone was not transitioning properly:
+       - **Verify:** Moves from Under Verification (`In Progress`) to Verified (`Completed` with timestamp) and Prioritized (`Completed`), making Stock Allocation the active in-progress stage.
+       - **Allocate:** Previously left Stage 4 ("Stock Allocated") showing as "In Progress" with an open number instead of turning solid completed (`✓ Stock Allocated` with timestamp), because `PrioritizedQueueTable` lacked a functional `onAllocate` prop/button and `useCitizenStore` cached stale requests from localStorage.
+       - **Dispatch:** Clicking "Dispatch" marks Stage 5 as completed (`✓ Dispatched` with timestamp), moving the active state to Stage 6 ("Delivered & Confirmed" / "In Transit to Site").
+       - **Deliver:** Confirms on-site handover, marking all 6 stages as completed (`✓ Delivered & Confirmed` with timestamp).
+  3. **Visual Stepper Connector Alignment:**
+     - The connector line was overlapping circle centers (`left: 50%`) and the active node used `animate-pulse`, dropping circle opacity to 50% and causing the blue connector line to slice through the circle and number 5.
+  4. **Database Stage Timestamp Persistence:**
+     - Every state transition (`verified`, `allocated`, `dispatched`, `delivered`, `rejected`) must write exact ISO timestamps directly to the Neon PostgreSQL database (`aiTriageDetails.stageTimestamps`), ensuring durability across browser refreshes and SSE synchronization.
+  5. **ADR-007 Partial Fulfillment Visibility:**
+     - Clear visual representation of split-batch orders in the public tracker, showing Amber indicators for partial allocations and a dedicated guarantee notice stating that remaining deficits remain locked at Priority Rank #1.
+  6. **Citizen Portal Cleanliness & Real-Time Sync:**
+     - Removed internal AI Clinical Triage technical evaluation card from public citizen view.
+     - Calibrated active stage radar ping duration to a balanced 1.8s.
+     - Implemented immediate Neon DB live revalidation and a 2.5s active poller fallback so citizen status is guaranteed to update immediately even across different ports and browser origins.
+- **Decision:**
+  1. **Multi-Resource Benchmark Expansion:**
+     - Seeded `REQ-1048` (Kurla West Evacuation Center, 180 people, food rations + clean water) and `REQ-1033` (Bandra Relief Depot, 95 people, medical kits + hygiene packs) with itemized multi-category tracking across both portals.
+  2. **Universal Lifecycle Stage Progression:**
+     - Standardized `resolveTrackingStages` across all 6 milestones:
+       - Submitted: Completed.
+       - Verified: Completed upon field confirmation, advancing to Prioritized (`Completed`) and Stock Allocation (`In Progress`).
+       - Allocated: Completed (`✓ Stock Allocated` or `⚡ Stock Allocated (Partial)`), advancing to Dispatch (`In Progress`).
+       - Dispatched: Completed (`✓ Dispatched`), advancing to Delivery Handover (`In Progress`).
+       - Delivered: Completed (`✓ Delivered & Confirmed`), marking all 6 stages finished.
+  3. **Functional Allocation in Command Queue:**
+     - Added `onAllocate` prop to `PrioritizedQueueTableProps` and replaced the static span with an active `<button onClick={() => onAllocate(req.id)}>` tied to `handleAllocate` in `page.tsx`.
+  4. **Two-Layer Radar Beacon & Gap-Only Line Connectors:**
+     - Replaced `animate-pulse` with a 100% solid, opaque circle (`z-10 bg-white ring-4 ring-blue-100`) and an independent outer ripple wave (`bg-blue-500/30 animate-ping` with `1.8s` duration).
+     - Clipped connector lines strictly to `left: calc(50% + 22px)` and `width: calc(100% + 1rem - 44px)` on desktop, guaranteeing zero line overlap with any circle.
+  5. **Neon DB Timestamp Recording & Cross-Port Revalidation:**
+     - Augmented `PATCH /api/requests` to derive and persist `stageTimestamps` in `aiTriageDetails.stageTimestamps`, broadcasting updates via SSE and `BroadcastChannel`.
+     - Added live database revalidation on mount, sample selection, and a 2.5s poller in `RequestTrackerView` alongside real-time SSE syncing in `useCitizenStore`.
+  6. **ADR-007 Partial Fulfillment Banner & Stepper Styling:**
+     - Added an Amber Alert banner explaining split-batch allocation under ADR-007, along with amber styling and warning icons on Stages 4 & 5 for partial allocations.
+- **Rationale:**
+  1. Guarantees realistic, non-trivial disaster scenarios with multi-resource requirements.
+  2. Ensures trust and transparency for citizens tracking critical emergency relief shipments.
+  3. Eliminates visual rendering artifacts and creates a polished, premium aesthetic.
+
+---
+
 ## Build Milestones & Phase Progress
 
 | Phase | Description | Status | Verification Checkpoint |
@@ -250,6 +300,8 @@ This living document logs all major architectural decisions (ADRs), milestone pr
 | **Phase 6** | Neon PostgreSQL + Prisma Integration & Server Route Handlers | **Completed** | Neon DB tables synced; AI triage + direct DB persistence verified end-to-end; `/api/requests` live across both portals |
 | **Phase 7** | Real-Time Cross-Portal SSE Streaming & Mumbai Operations Standardization | **Completed** | Server-Sent Events stream live; instant cross-portal updates verified with zero polling; dynamic top nav shortage badge |
 | **Phase 8** | End-to-End Demo Scenario Controller & Verification | **Completed** | One-click benchmark scenario reset (`/api/scenario/reset`), full theater map auto-framing, multi-resource allocation, and real-time SSE sync |
+| **Phase 9** | Multi-Resource Allocations, Real-Time Stage Timestamps & Tracker Precision | **Completed** | Full multi-resource benchmarks (`REQ-1048`, `REQ-1033`), Neon DB stage timestamp persistence, ADR-007 partial fulfillment banner, and gap-only stepper connectors |
+
 
 
 
