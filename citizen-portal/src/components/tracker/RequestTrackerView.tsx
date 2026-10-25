@@ -65,7 +65,6 @@ function resolveTrackingStages(req: ReliefRequest): {
     isDispatched ||
     req.requestStatus === 'fully_allocated' ||
     req.requestStatus === 'partially_allocated' ||
-    req.requestStatus === 'allocated' ||
     (typeof req.allocatedQty === 'number' && req.allocatedQty > 0);
   const isPrioritized =
     isAllocated || req.requestStatus === 'queued' || req.verificationStatus === 'verified';
