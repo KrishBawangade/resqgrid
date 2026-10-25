@@ -253,11 +253,26 @@ export default function CoordinatorOperationsPage() {
 
   // 1. Verify Request
   const handleVerify = async (id: string) => {
+    const nowIso = new Date().toISOString();
+    const req = requests.find((r) => r.id === id);
+    const updatedTimestamps = {
+      ...(req?.stageTimestamps || {}),
+      submitted: req?.stageTimestamps?.submitted || req?.timestamp || nowIso,
+      verified: nowIso,
+      prioritized: nowIso,
+    };
+    const updatedReq: ReliefRequest | null = req ? {
+      ...req,
+      verificationStatus: 'verified',
+      requestStatus: req.requestStatus === 'submitted' ? 'queued' : req.requestStatus,
+      stageTimestamps: updatedTimestamps,
+    } : null;
+
     setRequests((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, verificationStatus: 'verified' } : r))
+      prev.map((r) => (r.id === id && updatedReq ? updatedReq : r))
     );
-    if (selectedRequest && selectedRequest.id === id) {
-      setSelectedRequest((prev) => (prev ? { ...prev, verificationStatus: 'verified' } : null));
+    if (selectedRequest && selectedRequest.id === id && updatedReq) {
+      setSelectedRequest(updatedReq);
     }
     const log: AuditLogEntry = {
       id: `AUD-${Math.floor(800 + Math.random() * 200)}`,
@@ -275,7 +290,12 @@ export default function CoordinatorOperationsPage() {
       await fetch('/api/requests', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, verificationStatus: 'verified' }),
+        body: JSON.stringify({
+          id,
+          verificationStatus: 'verified',
+          requestStatus: updatedReq?.requestStatus,
+          stageTimestamps: updatedTimestamps,
+        }),
       });
     } catch (err) {
       console.error('Failed to persist verification to Neon DB:', err);
@@ -289,10 +309,19 @@ export default function CoordinatorOperationsPage() {
 
     const { result, updatedDepots, updatedRequest } = allocateResources(req, depots);
 
+    const nowIso = new Date().toISOString();
+    const updatedWithTimestamps: ReliefRequest = {
+      ...updatedRequest,
+      stageTimestamps: {
+        ...(updatedRequest.stageTimestamps || req.stageTimestamps || {}),
+        allocated: nowIso,
+      },
+    };
+
     setDepots(updatedDepots);
-    setRequests((prev) => prev.map((r) => (r.id === id ? updatedRequest : r)));
+    setRequests((prev) => prev.map((r) => (r.id === id ? updatedWithTimestamps : r)));
     if (selectedRequest && selectedRequest.id === id) {
-      setSelectedRequest(updatedRequest);
+      setSelectedRequest(updatedWithTimestamps);
     }
 
     const log: AuditLogEntry = {
@@ -312,7 +341,7 @@ export default function CoordinatorOperationsPage() {
       try {
         const ch = new BroadcastChannel('resqgrid_realtime');
         ch.postMessage({ type: 'DEPOTS_UPDATED', data: updatedDepots });
-        ch.postMessage({ type: 'REQUEST_UPDATED', data: updatedRequest });
+        ch.postMessage({ type: 'REQUEST_UPDATED', data: updatedWithTimestamps });
         ch.close();
       } catch {}
     }
@@ -324,12 +353,13 @@ export default function CoordinatorOperationsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id,
-          requestStatus: updatedRequest.requestStatus,
-          allocatedDepotId: updatedRequest.allocatedDepotId,
-          allocatedQty: updatedRequest.allocatedQty,
-          unfulfilledQty: updatedRequest.unfulfilledQty,
-          requestedResources: updatedRequest.requestedResources,
+          requestStatus: updatedWithTimestamps.requestStatus,
+          allocatedDepotId: updatedWithTimestamps.allocatedDepotId,
+          allocatedQty: updatedWithTimestamps.allocatedQty,
+          unfulfilledQty: updatedWithTimestamps.unfulfilledQty,
+          requestedResources: updatedWithTimestamps.requestedResources,
           depotAllocations: result.allocations || [],
+          stageTimestamps: updatedWithTimestamps.stageTimestamps,
         }),
       });
 
@@ -362,7 +392,16 @@ export default function CoordinatorOperationsPage() {
     const req = requests.find((r) => r.id === id);
     if (!req) return;
 
-    const updatedRequest: ReliefRequest = { ...req, requestStatus: 'dispatched' };
+    const nowIso = new Date().toISOString();
+    const updatedTimestamps = {
+      ...(req.stageTimestamps || {}),
+      dispatched: nowIso,
+    };
+    const updatedRequest: ReliefRequest = {
+      ...req,
+      requestStatus: 'dispatched',
+      stageTimestamps: updatedTimestamps,
+    };
     setRequests((prev) => prev.map((r) => (r.id === id ? updatedRequest : r)));
     if (selectedRequest && selectedRequest.id === id) {
       setSelectedRequest(updatedRequest);
@@ -399,6 +438,7 @@ export default function CoordinatorOperationsPage() {
           allocatedDepotId: req.allocatedDepotId,
           allocatedQty: req.allocatedQty,
           resourceType: req.resourceType,
+          stageTimestamps: updatedTimestamps,
         }),
       });
     } catch (err) {
@@ -411,7 +451,16 @@ export default function CoordinatorOperationsPage() {
     const req = requests.find((r) => r.id === id);
     if (!req) return;
 
-    const updatedRequest: ReliefRequest = { ...req, requestStatus: 'delivered' };
+    const nowIso = new Date().toISOString();
+    const updatedTimestamps = {
+      ...(req.stageTimestamps || {}),
+      delivered: nowIso,
+    };
+    const updatedRequest: ReliefRequest = {
+      ...req,
+      requestStatus: 'delivered',
+      stageTimestamps: updatedTimestamps,
+    };
     setRequests((prev) => prev.map((r) => (r.id === id ? updatedRequest : r)));
     if (selectedRequest && selectedRequest.id === id) {
       setSelectedRequest(updatedRequest);
@@ -554,6 +603,13 @@ export default function CoordinatorOperationsPage() {
 
   // 4. Reject Request
   const handleReject = async (id: string, reason: string) => {
+    const nowIso = new Date().toISOString();
+    const req = requests.find((r) => r.id === id);
+    const updatedTimestamps = {
+      ...(req?.stageTimestamps || {}),
+      rejected: nowIso,
+    };
+
     setRequests((prev) =>
       prev.map((r) =>
         r.id === id
@@ -563,6 +619,7 @@ export default function CoordinatorOperationsPage() {
               requestStatus: 'rejected',
               rejectionReason: reason,
               rejectedAt: new Date().toLocaleTimeString() + ' UTC',
+              stageTimestamps: updatedTimestamps,
             }
           : r
       )
@@ -576,6 +633,7 @@ export default function CoordinatorOperationsPage() {
               requestStatus: 'rejected',
               rejectionReason: reason,
               rejectedAt: new Date().toLocaleTimeString() + ' UTC',
+              stageTimestamps: updatedTimestamps,
             }
           : null
       );
@@ -601,6 +659,7 @@ export default function CoordinatorOperationsPage() {
           verificationStatus: 'rejected',
           requestStatus: 'rejected',
           rejectionReason: reason,
+          stageTimestamps: updatedTimestamps,
         }),
       });
     } catch (err) {
@@ -610,31 +669,30 @@ export default function CoordinatorOperationsPage() {
 
   // 5. Restore Rejected Request
   const handleRestore = async (id: string) => {
+    const nowIso = new Date().toISOString();
+    const req = requests.find((r) => r.id === id);
+    const updatedTimestamps = {
+      ...(req?.stageTimestamps || {}),
+      verified: nowIso,
+      prioritized: nowIso,
+      rejected: undefined,
+    };
+    const updatedReq: ReliefRequest | null = req
+      ? {
+          ...req,
+          verificationStatus: 'verified',
+          requestStatus: 'queued',
+          rejectionReason: undefined,
+          rejectedAt: undefined,
+          stageTimestamps: updatedTimestamps,
+        }
+      : null;
+
     setRequests((prev) =>
-      prev.map((r) =>
-        r.id === id
-          ? {
-              ...r,
-              verificationStatus: 'verified',
-              requestStatus: 'submitted',
-              rejectionReason: undefined,
-              rejectedAt: undefined,
-            }
-          : r
-      )
+      prev.map((r) => (r.id === id && updatedReq ? updatedReq : r))
     );
-    if (selectedRequest && selectedRequest.id === id) {
-      setSelectedRequest((prev) =>
-        prev
-          ? {
-              ...prev,
-              verificationStatus: 'verified',
-              requestStatus: 'submitted',
-              rejectionReason: undefined,
-              rejectedAt: undefined,
-            }
-          : null
-      );
+    if (selectedRequest && selectedRequest.id === id && updatedReq) {
+      setSelectedRequest(updatedReq);
     }
     showToast(`✓ Request ${id} restored to active dispatch queue.`);
 
@@ -646,8 +704,9 @@ export default function CoordinatorOperationsPage() {
         body: JSON.stringify({
           id,
           verificationStatus: 'verified',
-          requestStatus: 'submitted',
+          requestStatus: 'queued',
           rejectionReason: null,
+          stageTimestamps: updatedTimestamps,
         }),
       });
     } catch (err) {

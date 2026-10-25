@@ -411,7 +411,11 @@ export default function InteractiveDisasterMap({
             ">
               <span style="color: ${color}; font-weight: 800;">${req.id}</span>
               <span style="color: #94a3b8;">•</span>
-              <span>${req.requestedQty}${req.resourceType === 'drinking_water' ? 'L' : ''}</span>
+              <span>${
+                req.requestedResources && req.requestedResources.length > 1
+                  ? `${req.requestedResources.length} Items`
+                  : `${req.requestedQty}${req.resourceType === 'drinking_water' ? 'L' : ''}`
+              }</span>
             </div>
           </div>
         `,
@@ -439,9 +443,17 @@ export default function InteractiveDisasterMap({
             ">Rank #${req.priorityScore.toFixed(0)}</span>
           </div>
 
-          <div style="font-size: 11.5px; color: #334155; margin-bottom: 6px;">
-            <strong>${req.resourceType.replace('_', ' ').toUpperCase()}:</strong> ${req.requestedQty} units needed
-          </div>
+          ${req.requestedResources && req.requestedResources.length > 1
+            ? `<div style="font-size: 11px; color: #334155; margin-bottom: 6px;">
+                <div style="font-weight: 800; color: #1e40af; margin-bottom: 3px;">📦 Multi-Resource Demand (${req.requestedResources.length} Categories):</div>
+                <div style="line-height: 1.4; padding: 4px 6px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;">
+                  ${req.requestedResources.map((it) => `• <strong>${it.resourceType === 'drinking_water' ? 'Water' : it.resourceType === 'medical_supplies' ? 'Medical' : it.resourceType === 'food_rations' ? 'Food' : 'Shelter'}:</strong> ${it.requestedQty}${it.resourceType === 'drinking_water' ? 'L' : ' units'}`).join('<br/>')}
+                </div>
+              </div>`
+            : `<div style="font-size: 11.5px; color: #334155; margin-bottom: 6px;">
+                <strong>${req.resourceType.replace('_', ' ').toUpperCase()}:</strong> ${req.requestedQty} units needed
+              </div>`
+          }
 
           <div style="font-size: 11px; color: #64748b; margin-bottom: 6px;">
             📍 <strong>${req.location.zoneName}</strong><br/>
@@ -600,7 +612,10 @@ export default function InteractiveDisasterMap({
             </div>
 
             <div style="font-size: 11.5px; color: #334155; margin-bottom: 4px;">
-              <strong>Fulfillment:</strong> ${req.allocatedQty || req.requestedQty} / ${req.requestedQty} units of ${req.resourceType.replace('_', ' ')}
+              ${req.requestedResources && req.requestedResources.length > 1
+                ? `<strong>Fulfillment:</strong> ${req.requestedResources.length} Categories (${req.allocatedQty || req.requestedQty} / ${req.requestedQty} units)`
+                : `<strong>Fulfillment:</strong> ${req.allocatedQty || req.requestedQty} / ${req.requestedQty} units of ${req.resourceType.replace('_', ' ')}`
+              }
             </div>
 
             <div style="font-size: 11px; color: #64748b; margin-bottom: 6px; line-height: 1.4;">

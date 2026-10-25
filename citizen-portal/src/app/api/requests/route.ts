@@ -9,6 +9,7 @@ import {
   VulnerabilityFactors,
   ReliefRequest,
 } from '@/lib/types';
+import { deriveStageTimestamps } from '@/lib/utils/stageTimestamps';
 
 
 // Map database row to frontend ReliefRequest type
@@ -91,6 +92,20 @@ export function formatDbRequest(row: {
   const finalAllocatedQty = parsedRequestedResources.length > 1 ? totalAlloc : row.allocatedQty;
   const finalUnfulfilledQty = parsedRequestedResources.length > 1 && totalReq > 0 ? totalUnful : row.unfulfilledQty;
 
+  const aiDetails = (row.aiTriageDetails && typeof row.aiTriageDetails === 'object')
+    ? (row.aiTriageDetails as Record<string, unknown>)
+    : null;
+  const rawTimestamps = aiDetails?.stageTimestamps as ReliefRequest['stageTimestamps'] | undefined;
+  const stageTimestamps = deriveStageTimestamps({
+    timestamp: row.timestamp,
+    verificationStatus: row.verificationStatus,
+    requestStatus: row.requestStatus,
+    allocatedQty: finalAllocatedQty,
+    unfulfilledQty: finalUnfulfilledQty,
+    rejectedAt: row.rejectionReason ? String(row.timestamp) : undefined,
+    stageTimestamps: rawTimestamps,
+  });
+
   return {
     id: row.id,
     timestamp: row.timestamp instanceof Date ? row.timestamp.toISOString() : String(row.timestamp),
@@ -126,6 +141,7 @@ export function formatDbRequest(row: {
     aiTriageInsight: row.aiTriageInsight || undefined,
     aiConfidence: row.aiConfidence || undefined,
     aiTriageDetails: row.aiTriageDetails as ReliefRequest['aiTriageDetails'],
+    stageTimestamps,
     rejectionReason: row.rejectionReason || undefined,
   };
 }
@@ -270,6 +286,9 @@ export async function POST(request: Request) {
           vulnerabilityReason: triageData.vulnerabilityReason,
           recommendedDispatch: triageData.recommendedDispatch,
           engineUsed: triageData.engineUsed,
+          stageTimestamps: {
+            submitted: new Date().toISOString(),
+          },
         },
       },
     });
@@ -342,6 +361,58 @@ export async function PATCH(request: Request) {
     if (rejectionReason !== undefined) updateData.rejectionReason = rejectionReason;
     if (notes !== undefined) updateData.notes = notes;
     if (waitingMinutes !== undefined) updateData.waitingMinutes = waitingMinutes;
+
+    const existing = await db.reliefRequest.findUnique({ where: { id } });
+
+    // Automatic Guaranteed Stage Timestamp Persistence in Neon DB
+    const currentAi = (existing?.aiTriageDetails && typeof existing.aiTriageDetails === 'object')
+      ? (existing.aiTriageDetails as Record<string, unknown>)
+      : {};
+    const existingTimestamps = ((currentAi.stageTimestamps && typeof currentAi.stageTimestamps === 'object')
+      ? (currentAi.stageTimestamps as Record<string, string>)
+      : {}) || {};
+
+    const nowIso = new Date().toISOString();
+    const updatedStageTimestamps: Record<string, string> = {
+      submitted: existingTimestamps.submitted || (existing?.timestamp ? new Date(existing.timestamp).toISOString() : nowIso),
+      ...existingTimestamps,
+    };
+
+    if (body.stageTimestamps && typeof body.stageTimestamps === 'object') {
+      Object.assign(updatedStageTimestamps, body.stageTimestamps);
+    }
+
+    if (verificationStatus === 'verified' && !updatedStageTimestamps.verified) {
+      updatedStageTimestamps.verified = nowIso;
+      if (!updatedStageTimestamps.prioritized) {
+        updatedStageTimestamps.prioritized = nowIso;
+      }
+    }
+
+    if (
+      (requestStatus === 'partially_allocated' || requestStatus === 'fully_allocated' || (typeof allocatedQty === 'number' && allocatedQty > 0)) &&
+      !updatedStageTimestamps.allocated
+    ) {
+      updatedStageTimestamps.allocated = nowIso;
+    }
+
+    if (requestStatus === 'dispatched' && !updatedStageTimestamps.dispatched) {
+      updatedStageTimestamps.dispatched = nowIso;
+    }
+
+    if (requestStatus === 'delivered' && !updatedStageTimestamps.delivered) {
+      updatedStageTimestamps.delivered = nowIso;
+    }
+
+    if ((requestStatus === 'rejected' || verificationStatus === 'rejected') && !updatedStageTimestamps.rejected) {
+      updatedStageTimestamps.rejected = nowIso;
+    }
+
+    updateData.aiTriageDetails = {
+      ...currentAi,
+      ...((body.aiTriageDetails as object) || {}),
+      stageTimestamps: updatedStageTimestamps,
+    };
 
     const updated = await db.reliefRequest.update({
       where: { id },

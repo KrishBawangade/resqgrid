@@ -381,7 +381,16 @@ export default function CoordinatorInventoryPage() {
     const req = requests.find((r) => r.id === id);
     if (!req) return;
 
-    const updatedRequest: ReliefRequest = { ...req, requestStatus: 'delivered' };
+    const nowIso = new Date().toISOString();
+    const updatedTimestamps = {
+      ...(req.stageTimestamps || {}),
+      delivered: nowIso,
+    };
+    const updatedRequest: ReliefRequest = {
+      ...req,
+      requestStatus: 'delivered',
+      stageTimestamps: updatedTimestamps,
+    };
     setRequests((prev) => prev.map((r) => (r.id === id ? updatedRequest : r)));
 
     // Clear reserved stock in local depots state so reservation disappears immediately
@@ -429,6 +438,7 @@ export default function CoordinatorInventoryPage() {
           allocatedDepotId: req.allocatedDepotId,
           allocatedQty: req.allocatedQty,
           resourceType: req.resourceType,
+          stageTimestamps: updatedTimestamps,
         }),
       });
 
@@ -456,7 +466,16 @@ export default function CoordinatorInventoryPage() {
     const req = requests.find((r) => r.id === id);
     if (!req) return;
 
-    const updatedRequest: ReliefRequest = { ...req, requestStatus: 'dispatched' };
+    const nowIso = new Date().toISOString();
+    const updatedTimestamps = {
+      ...(req.stageTimestamps || {}),
+      dispatched: nowIso,
+    };
+    const updatedRequest: ReliefRequest = {
+      ...req,
+      requestStatus: 'dispatched',
+      stageTimestamps: updatedTimestamps,
+    };
     setRequests((prev) => prev.map((r) => (r.id === id ? updatedRequest : r)));
 
     showToast(`🚚 Relief cargo for ${id} dispatched into transit corridor!`);
@@ -479,6 +498,7 @@ export default function CoordinatorInventoryPage() {
           allocatedDepotId: req.allocatedDepotId,
           allocatedQty: req.allocatedQty,
           resourceType: req.resourceType,
+          stageTimestamps: updatedTimestamps,
         }),
       });
     } catch (err) {
